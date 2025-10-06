@@ -22,7 +22,7 @@ jobs:
       run: dotnet restore
 
     - name: Build Release (x64)
-      run: dotnet build -c Release --no-restore --arch x64
+      run: dotnet build dokan-mirror/dokan-mirror.csproj -c Release --no-restore -p:Platform=x64
 
     - name: Publish Application (x64)
       run: dotnet publish dokan-mirror/dokan-mirror.csproj -c Release -r win-x64 --self-contained false -p:PublishSingleFile=false -p:Platform=x64 -o publish-x64
