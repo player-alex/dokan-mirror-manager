@@ -22,15 +22,15 @@ jobs:
       run: dotnet restore
 
     - name: Build Release (x64)
-      run: dotnet build dokan-mirror/dokan-mirror.csproj -c Release --no-restore -p:Platform=x64
+      run: dotnet build dokan-mirror-manager/dokan-mirror-manager.csproj -c Release --no-restore -p:Platform=x64
 
     - name: Publish Application (x64)
-      run: dotnet publish dokan-mirror/dokan-mirror.csproj -c Release -r win-x64 --self-contained false -p:PublishSingleFile=false -p:Platform=x64 -o publish-x64
+      run: dotnet publish dokan-mirror-manager/dokan-mirror-manager.csproj -c Release -r win-x64 --self-contained false -p:PublishSingleFile=false -p:Platform=x64 -o publish-x64
 
     - name: Create Release Archive (x64)
       run: |
         cd publish-x64
-        Compress-Archive -Path * -DestinationPath ../dokan-mirror-${{ github.ref_name }}-win-x64.zip
+        Compress-Archive -Path * -DestinationPath ../dokan-mirror-manager-${{ github.ref_name }}-win-x64.zip
       shell: pwsh
 
     - name: Extract version from tag
@@ -41,17 +41,17 @@ jobs:
     - name: Create Release
       uses: softprops/action-gh-release@v1
       with:
-        files: dokan-mirror-${{ github.ref_name }}-win-x64.zip
+        files: dokan-mirror-manager-${{ github.ref_name }}-win-x64.zip
         body: |
           ## 🚀 Dokan Mirror Manager ${{ github.ref_name }}
 
           ### 📥 Installation
 
-          1. Download `dokan-mirror-${{ github.ref_name }}-win-x64.zip`
+          1. Download `dokan-mirror-manager-${{ github.ref_name }}-win-x64.zip`
           2. Install [Dokan Driver](https://github.com/dokan-dev/dokany/releases) if not already installed
           3. Install [.NET 8.0 Runtime](https://dotnet.microsoft.com/download/dotnet/8.0) if not already installed
           4. Extract the archive
-          5. Run `dokan-mirror.exe` as Administrator
+          5. Run `dokan-mirror-manager.exe` as Administrator
 
           ### 📋 Requirements
 

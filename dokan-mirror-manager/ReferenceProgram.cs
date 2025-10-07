@@ -1,4 +1,4 @@
-﻿using DokanMirror;
+﻿using DokanMirrorManager;
 using DokanNet;
 using DokanNet.Logging;
 using System;
@@ -7,7 +7,7 @@ using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
 using System.Threading.Tasks;
 
-namespace DokanMirror;
+namespace DokanMirrorManager;
 
 internal class Program
 {

@@ -3,16 +3,16 @@ using System.Runtime.InteropServices;
 using System.Threading;
 using System.Windows;
 
-namespace DokanMirror;
+namespace DokanMirrorManager;
 
 /// <summary>
-/// Example loader for using DokanMirror as a library.
+/// Example loader for using DokanMirrorManager as a library.
 /// This file is NOT compiled by default - it's an example for library usage.
 ///
 /// To use this as a library:
 /// 1. Change OutputType in .csproj from "WinExe" to "Library"
 /// 2. Rename this file from Loader.cs.example to Loader.cs
-/// 3. Build the project - it will produce DokanMirror.dll
+/// 3. Build the project - it will produce DokanMirrorManager.dll
 /// 4. Call __Launch__ from your native code to start the application
 /// </summary>
 public static class Loader
@@ -22,7 +22,7 @@ public static class Loader
 
     /// <summary>
     /// Entry point for native callers.
-    /// Call this function from unmanaged code to launch the DokanMirror application.
+    /// Call this function from unmanaged code to launch the DokanMirrorManager application.
     /// </summary>
     [UnmanagedCallersOnly(EntryPoint = "__Launch__")]
     public static void Launch()
@@ -53,7 +53,7 @@ public static class Loader
 
         _appThread.SetApartmentState(ApartmentState.STA);
         _appThread.IsBackground = false; // Keep app alive
-        _appThread.Name = "DokanMirror-Main";
+        _appThread.Name = "DokanMirrorManager-Main";
         _appThread.Start();
     }
 
@@ -77,7 +77,7 @@ public static class Loader
  * Example usage from C/C++:
  *
  * // Load the DLL
- * HMODULE hModule = LoadLibrary(L"DokanMirror.dll");
+ * HMODULE hModule = LoadLibrary(L"DokanMirrorManager.dll");
  *
  * // Get the function pointer
  * typedef void (*LaunchFunc)();

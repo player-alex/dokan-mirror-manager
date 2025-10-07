@@ -1,6 +1,6 @@
 using MahApps.Metro.Controls;
 
-namespace DokanMirror.Views;
+namespace DokanMirrorManager.Views;
 
 public partial class ShellView : MetroWindow
 {

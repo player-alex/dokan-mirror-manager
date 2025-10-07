@@ -3,7 +3,7 @@ using Microsoft.Win32.SafeHandles;
 using System;
 using System.ComponentModel;
 
-namespace DokanMirror;
+namespace DokanMirrorManager;
 
 public static class Extensions
 {

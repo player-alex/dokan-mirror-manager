@@ -1,5 +1,5 @@
 using Caliburn.Micro;
-using DokanMirror.Models;
+using DokanMirrorManager.Models;
 using DokanNet;
 using System.Collections.ObjectModel;
 using System.ComponentModel;
@@ -12,7 +12,7 @@ using Hardcodet.Wpf.TaskbarNotification;
 using System.Windows.Interop;
 using System.Runtime.InteropServices;
 
-namespace DokanMirror.ViewModels;
+namespace DokanMirrorManager.ViewModels;
 
 public class ShellViewModel : Screen
 {

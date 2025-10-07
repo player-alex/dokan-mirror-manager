@@ -6,7 +6,7 @@ https://github.com/dotnet/docs/blob/12473973716efbf21470ecbc96de0bd5e1f65e3b/doc
 hence we want to avoid touching the filestream once obtained the safefilehandle
 */
 
-using DokanMirror;
+using DokanMirrorManager;
 using DokanNet;
 using DokanNet.Logging;
 using LTRData.Extensions.Native.Memory;
@@ -18,7 +18,7 @@ using System.Runtime.Versioning;
 using static System.Runtime.InteropServices.JavaScript.JSType;
 using FileAccess = System.IO.FileAccess;
 
-namespace DokanMirror;
+namespace DokanMirrorManager;
 
 /// <summary>
 /// Implementation of IDokanOperationsUnsafe to demonstrate usage.

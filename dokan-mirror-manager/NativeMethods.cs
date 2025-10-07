@@ -3,7 +3,7 @@ using System.ComponentModel;
 using System.Runtime.InteropServices;
 using Microsoft.Win32.SafeHandles;
 
-namespace DokanMirror;
+namespace DokanMirrorManager;
 
 internal static class NativeMethods
 {

@@ -1,28 +1,34 @@
-using System;
-using System.Collections.Generic;
-using System.ComponentModel;
+﻿using System.ComponentModel;
 using System.Globalization;
-using System.IO;
-using System.Linq;
 using System.Runtime.InteropServices;
-using System.Runtime.Versioning;
 using System.Security.AccessControl;
-#if NETFRAMEWORK
-using DiscUtils.Streams.Compatibility;
-#endif
-using DokanNet.Logging;
 using DokanNet;
+using DokanNet.Logging;
 using LTRData.Extensions.Native.Memory;
 using static DokanNet.FormatProviders;
 using NativeFileAccess = DokanNet.FileAccess;
 using FileAccess = System.IO.FileAccess;
+using FileAttributes = System.IO.FileAttributes;
+using FileShare = System.IO.FileShare;
+using FileMode = System.IO.FileMode;
+using FileOptions = System.IO.FileOptions;
+using FileStream = System.IO.FileStream;
+using Directory = System.IO.Directory;
+using File = System.IO.File;
+using DirectoryInfo = System.IO.DirectoryInfo;
+using FileInfo = System.IO.FileInfo;
+using DirectoryNotFoundException = System.IO.DirectoryNotFoundException;
+using IOException = System.IO.IOException;
+using DriveInfo = System.IO.DriveInfo;
+using Path = System.IO.Path;
+using Stream = System.IO.Stream;
+using SeekOrigin = System.IO.SeekOrigin;
+using FileSystemInfo = System.IO.FileSystemInfo;
+using FileNotFoundException = System.IO.FileNotFoundException;
 
-namespace DokanMirror;
+namespace DokanMirrorManager;
 
-#if NET5_0_OR_GREATER
-[SupportedOSPlatform("windows")]
-#endif
-internal class Mirror : IDokanOperations2
+public class Mirror : IDokanOperations2
 {
     int IDokanOperations2.DirectoryListingTimeoutResetIntervalMs => 0;
 
@@ -37,36 +43,21 @@ internal class Mirror : IDokanOperations2
                                                NativeFileAccess.Delete |
                                                NativeFileAccess.GenericWrite;
 
-    private readonly ILogger _logger;
-
-    public Mirror(ILogger logger, string path)
+    public Mirror(ILogger? logger, string path)
     {
         if (!Directory.Exists(path))
         {
             throw new ArgumentException("Path not found", nameof(path));
         }
 
-        _logger = logger;
         this.path = path;
     }
 
-#if NETCOREAPP
     protected string GetPath(ReadOnlyNativeMemory<char> fileName) => string.Concat(path, fileName.Span);
-#else
-    protected string GetPath(ReadOnlyNativeMemory<char> fileName) => path + fileName.ToString();
-#endif
 
     protected static NtStatus Trace(string method, ReadOnlyNativeMemory<char> fileName, in DokanFileInfo info, NtStatus result,
         params object?[] parameters)
     {
-#if CONSOLE_LOGGING
-        var extraParameters = parameters != null && parameters.Length > 0
-            ? ", " + string.Join(", ", parameters.Select(x => string.Format(DefaultFormatProvider, "{0}", x)))
-            : string.Empty;
-
-        logger.Debug(DokanFormat($"{method}('{fileName.ToString()}', {info}{extraParameters}) -> {result}"));
-#endif
-
         return result;
     }
 
@@ -74,12 +65,6 @@ internal class Mirror : IDokanOperations2
         NativeFileAccess access, FileShare share, FileMode mode, FileOptions options, FileAttributes attributes,
         NtStatus result)
     {
-#if CONSOLE_LOGGING
-        logger.Debug(
-            DokanFormat(
-                $"{method}('{fileName.ToString()}', {info}, [{access}], [{share}], [{mode}], [{options}], [{attributes}]) -> {result}"));
-#endif
-
         return result;
     }
 
@@ -258,7 +243,7 @@ internal class Mirror : IDokanOperations2
                 }
 
                 bool fileCreated = mode == FileMode.CreateNew || mode == FileMode.Create || (!pathExists && mode == FileMode.OpenOrCreate);
-                
+
                 if (fileCreated)
                 {
                     FileAttributes new_attributes = attributes;
@@ -306,13 +291,6 @@ internal class Mirror : IDokanOperations2
 
     public void Cleanup(ReadOnlyNativeMemory<char> fileName, ref DokanFileInfo info)
     {
-#if TRACE
-        if (info.Context != null)
-        {
-            Console.WriteLine(DokanFormat($"{nameof(Cleanup)}('{fileName}', {info} - entering"));
-        }
-#endif
-
         (info.Context as FileStream)?.Dispose();
         info.Context = null;
 
@@ -333,17 +311,9 @@ internal class Mirror : IDokanOperations2
 
     public void CloseFile(ReadOnlyNativeMemory<char> fileName, ref DokanFileInfo info)
     {
-#if TRACE
-        if (info.Context != null)
-        {
-            Console.WriteLine(DokanFormat($"{nameof(CloseFile)}('{fileName}', {info} - entering"));
-        }
-#endif
-
         (info.Context as FileStream)?.Dispose();
         info.Context = null;
         Trace(nameof(CloseFile), fileName, info, DokanResult.Success);
-        // could recreate cleanup code here but this is not called sometimes
     }
 
     public virtual NtStatus ReadFile(ReadOnlyNativeMemory<char> fileName, NativeMemory<byte> buffer, out int bytesRead, long offset, ref DokanFileInfo info)
@@ -503,7 +473,7 @@ internal class Mirror : IDokanOperations2
                 var ct = creationTime?.ToFileTime() ?? 0;
                 var lat = lastAccessTime?.ToFileTime() ?? 0;
                 var lwt = lastWriteTime?.ToFileTime() ?? 0;
-                
+
                 if (NativeMethods.SetFileTime(stream.SafeFileHandle, ref ct, ref lat, ref lwt))
                 {
                     return DokanResult.Success;
@@ -692,22 +662,76 @@ internal class Mirror : IDokanOperations2
 
     public NtStatus GetDiskFreeSpace(out long freeBytesAvailable, out long totalNumberOfBytes, out long totalNumberOfFreeBytes, ref DokanFileInfo info)
     {
-        var dinfo = DriveInfo.GetDrives().Single(di => string.Equals(di.RootDirectory.Name, Path.GetPathRoot(path + "\\"), StringComparison.OrdinalIgnoreCase));
+        try
+        {
+            var dinfo = DriveInfo.GetDrives().Single(di => string.Equals(di.RootDirectory.Name, Path.GetPathRoot(path + "\\"), StringComparison.OrdinalIgnoreCase));
 
-        freeBytesAvailable = dinfo.TotalFreeSpace;
-        totalNumberOfBytes = dinfo.TotalSize;
-        totalNumberOfFreeBytes = dinfo.AvailableFreeSpace;
+            freeBytesAvailable = dinfo.TotalFreeSpace;
+            totalNumberOfBytes = dinfo.TotalSize;
+            totalNumberOfFreeBytes = dinfo.AvailableFreeSpace;
 
-        return Trace(nameof(GetDiskFreeSpace), default, info, DokanResult.Success, $"out {freeBytesAvailable}",
-            $"out {totalNumberOfBytes}", $"out {totalNumberOfFreeBytes}");
+            return Trace(nameof(GetDiskFreeSpace), default, info, DokanResult.Success, $"out {freeBytesAvailable}",
+                $"out {totalNumberOfBytes}", $"out {totalNumberOfFreeBytes}");
+        }
+        catch (Exception ex)
+        {
+            // Log the actual exception for debugging
+            var logPath = System.IO.Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "diskspace_error.log");
+            try
+            {
+                System.IO.File.AppendAllText(logPath, $"[{DateTime.Now}] GetDiskFreeSpace error for path '{path}':\n{ex.GetType().Name}: {ex.Message}\n{ex.StackTrace}\n\n");
+            }
+            catch { }
+
+            // Return fallback values
+            freeBytesAvailable = 512L * 1024 * 1024 * 1024; // 512 GB
+            totalNumberOfBytes = 1024L * 1024 * 1024 * 1024; // 1 TB
+            totalNumberOfFreeBytes = 512L * 1024 * 1024 * 1024; // 512 GB
+
+            return Trace(nameof(GetDiskFreeSpace), default, info, DokanResult.Success, $"out {freeBytesAvailable}",
+                $"out {totalNumberOfBytes}", $"out {totalNumberOfFreeBytes}");
+        }
     }
 
     public NtStatus GetVolumeInformation(NativeMemory<char> volumeLabel, out FileSystemFeatures features,
         NativeMemory<char> fileSystemName, out uint maximumComponentLength, ref uint volumeSerialNumber, ref DokanFileInfo info)
     {
-        volumeLabel.SetString("DOKAN");
+        // Set volume label based on source path
+        string label = "";
+        try
+        {
+            // Check if path is a drive root (e.g., C:\)
+            var pathRoot = Path.GetPathRoot(path);
+            if (!string.IsNullOrEmpty(pathRoot) && path.TrimEnd('\\').Equals(pathRoot.TrimEnd('\\'), StringComparison.OrdinalIgnoreCase))
+            {
+                // It's a drive root - get the volume label
+                var driveInfo = new DriveInfo(pathRoot);
+                if (driveInfo.IsReady)
+                {
+                    label = driveInfo.VolumeLabel ?? "";
+                }
+            }
+            else
+            {
+                // It's a folder - use the folder name
+                label = Path.GetFileName(path.TrimEnd('\\', '/')) ?? "";
+            }
+        }
+        catch
+        {
+            // If any error occurs, use empty label
+            label = "";
+        }
+
+        volumeLabel.SetString(label);
         fileSystemName.SetString("NTFS");
         maximumComponentLength = 256;
+
+        // Set a volume serial number if not already set
+        if (volumeSerialNumber == 0)
+        {
+            volumeSerialNumber = (uint)path.GetHashCode();
+        }
 
         features = FileSystemFeatures.CasePreservedNames | FileSystemFeatures.CaseSensitiveSearch |
                    FileSystemFeatures.PersistentAcls | FileSystemFeatures.SupportsRemoteStorage |
@@ -722,15 +746,10 @@ internal class Mirror : IDokanOperations2
     {
         try
         {
-#if NET5_0_OR_GREATER
+            var filePath = GetPath(fileName);
             security = info.IsDirectory
-                ? (FileSystemSecurity)new DirectoryInfo(GetPath(fileName)).GetAccessControl()
-                : new FileInfo(GetPath(fileName)).GetAccessControl();
-#else
-            security = info.IsDirectory
-                ? (FileSystemSecurity)Directory.GetAccessControl(GetPath(fileName))
-                : File.GetAccessControl(GetPath(fileName));
-#endif
+                ? (FileSystemSecurity)System.IO.FileSystemAclExtensions.GetAccessControl(new DirectoryInfo(filePath))
+                : (FileSystemSecurity)System.IO.FileSystemAclExtensions.GetAccessControl(new FileInfo(filePath));
             return Trace(nameof(GetFileSecurity), fileName, info, DokanResult.Success, sections.ToString());
         }
         catch (UnauthorizedAccessException)
@@ -745,25 +764,15 @@ internal class Mirror : IDokanOperations2
     {
         try
         {
-#if NET5_0_OR_GREATER
+            var filePath = GetPath(fileName);
             if (info.IsDirectory)
             {
-                new DirectoryInfo(GetPath(fileName)).SetAccessControl((DirectorySecurity)security);
+                System.IO.FileSystemAclExtensions.SetAccessControl(new DirectoryInfo(filePath), (DirectorySecurity)security);
             }
             else
             {
-                new FileInfo(GetPath(fileName)).SetAccessControl((FileSecurity)security);
+                System.IO.FileSystemAclExtensions.SetAccessControl(new FileInfo(filePath), (FileSecurity)security);
             }
-#else
-            if (info.IsDirectory)
-            {
-                Directory.SetAccessControl(GetPath(fileName), (DirectorySecurity)security);
-            }
-            else
-            {
-                File.SetAccessControl(GetPath(fileName), (FileSecurity)security);
-            }
-#endif
             return Trace(nameof(SetFileSecurity), fileName, info, DokanResult.Success, sections.ToString());
         }
         catch (UnauthorizedAccessException)
@@ -779,11 +788,7 @@ internal class Mirror : IDokanOperations2
 
     public NtStatus Unmounted(ref DokanFileInfo info)
     {
-        var ntStatus = Trace(nameof(Unmounted), default, info, DokanResult.Success);
-
-        (_logger as IDisposable)?.Dispose();
-
-        return ntStatus;
+        return Trace(nameof(Unmounted), default, info, DokanResult.Success);
     }
 
     public NtStatus FindStreams(ReadOnlyNativeMemory<char> fileName, out IEnumerable<FindFileInformation> streams, ref DokanFileInfo info)

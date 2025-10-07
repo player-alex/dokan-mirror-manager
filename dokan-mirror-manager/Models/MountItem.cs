@@ -1,7 +1,7 @@
 using Caliburn.Micro;
 using DokanNet;
 
-namespace DokanMirror.Models;
+namespace DokanMirrorManager.Models;
 
 public enum MountStatus
 {

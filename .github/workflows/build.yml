@@ -23,24 +23,24 @@ jobs:
       run: dotnet restore
 
     - name: Build Debug (x64)
-      run: dotnet build dokan-mirror/dokan-mirror.csproj -c Debug --no-restore -p:Platform=x64
+      run: dotnet build dokan-mirror-manager/dokan-mirror-manager.csproj -c Debug --no-restore -p:Platform=x64
 
     - name: Build Release (x64)
-      run: dotnet build dokan-mirror/dokan-mirror.csproj -c Release --no-restore -p:Platform=x64
+      run: dotnet build dokan-mirror-manager/dokan-mirror-manager.csproj -c Release --no-restore -p:Platform=x64
 
     - name: List build outputs
       run: |
         echo "Debug build (x64):"
-        if (Test-Path "dokan-mirror\bin\x64\Debug\net8.0-windows10.0.17763.0\") {
-          dir dokan-mirror\bin\x64\Debug\net8.0-windows10.0.17763.0\
+        if (Test-Path "dokan-mirror-manager\bin\x64\Debug\net8.0-windows10.0.17763.0\") {
+          dir dokan-mirror-manager\bin\x64\Debug\net8.0-windows10.0.17763.0\
         } else {
-          dir dokan-mirror\bin\Debug\net8.0-windows10.0.17763.0\
+          dir dokan-mirror-manager\bin\Debug\net8.0-windows10.0.17763.0\
         }
         echo ""
         echo "Release build (x64):"
-        if (Test-Path "dokan-mirror\bin\x64\Release\net8.0-windows10.0.17763.0\") {
-          dir dokan-mirror\bin\x64\Release\net8.0-windows10.0.17763.0\
+        if (Test-Path "dokan-mirror-manager\bin\x64\Release\net8.0-windows10.0.17763.0\") {
+          dir dokan-mirror-manager\bin\x64\Release\net8.0-windows10.0.17763.0\
         } else {
-          dir dokan-mirror\bin\Release\net8.0-windows10.0.17763.0\
+          dir dokan-mirror-manager\bin\Release\net8.0-windows10.0.17763.0\
         }
       shell: pwsh

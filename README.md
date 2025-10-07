@@ -45,7 +45,7 @@
 1. **Download** the latest release from the [Releases](../../releases) page
 2. **Install** [Dokan Driver](https://github.com/dokan-dev/dokany/releases) if not already installed
 3. **Extract** the downloaded archive
-4. **Run** `dokan-mirror.exe` as Administrator
+4. **Run** `dokan-mirror-manager.exe` as Administrator
 
 > ⚠️ **Important**: The application must be run with Administrator privileges to perform mount operations.
 
@@ -95,8 +95,8 @@ The application runs as a single instance. If you try to launch it while already
 
 ```bash
 # Clone the repository
-git clone https://github.com/player-alex/dokan-mirror.git
-cd dokan-mirror
+git clone https://github.com/player-alex/dokan-mirror-manager.git
+cd dokan-mirror-manager
 
 # Restore dependencies
 dotnet restore
@@ -112,7 +112,7 @@ dotnet build -c Release --arch x64
 
 ```bash
 # Run as Administrator (required for Dokan operations)
-dotnet run --project dokan-mirror/dokan-mirror.csproj
+dotnet run --project dokan-mirror-manager/dokan-mirror-manager.csproj
 ```
 
 > ⚠️ **Note**: Must be run as Administrator for Dokan operations.
@@ -126,7 +126,7 @@ The project includes `Loader.cs.example` which demonstrates how to use DokanMirr
 3. Build the project - it will produce `DokanMirror.dll`
 4. Call `__Launch__` from your native code to start the application
 
-See [Loader.cs.example](dokan-mirror/Loader.cs.example) for C/C++ usage examples.
+See [Loader.cs.example](dokan-mirror-manager/Loader.cs.example) for C/C++ usage examples.
 
 ## ⚙️ Configuration
 

@@ -1,12 +1,12 @@
 ﻿using System.Windows;
 using Caliburn.Micro;
-using DokanMirror.ViewModels;
+using DokanMirrorManager.ViewModels;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading;
 using System.Runtime.InteropServices;
 
-namespace DokanMirror
+namespace DokanMirrorManager
 {
     public partial class App : Application
     {
@@ -23,7 +23,7 @@ namespace DokanMirror
         {
             // Check for single instance
             bool createdNew;
-            _mutex = new Mutex(true, "DokanMirrorManager_SingleInstance", out createdNew);
+            _mutex = new Mutex(true, "DokanMirrorManagerManager_SingleInstance", out createdNew);
 
             if (!createdNew)
             {

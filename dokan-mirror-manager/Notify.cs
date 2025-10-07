@@ -3,7 +3,7 @@ using System.IO;
 using System.Runtime.Versioning;
 using DokanNet;
 
-namespace DokanMirror;
+namespace DokanMirrorManager;
 
 #if NET5_0_OR_GREATER
 [SupportedOSPlatform("windows")]

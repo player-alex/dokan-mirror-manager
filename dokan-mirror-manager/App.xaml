@@ -1,7 +1,7 @@
-﻿<Application x:Class="DokanMirror.App"
+﻿<Application x:Class="DokanMirrorManager.App"
              xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-             xmlns:local="clr-namespace:DokanMirror">
+             xmlns:local="clr-namespace:DokanMirrorManager">
     <Application.Resources>
         <ResourceDictionary>
             <ResourceDictionary.MergedDictionaries>
