@@ -10,7 +10,7 @@
 
 **A modern WPF application for managing Dokan file system mirrors with an intuitive user interface** 🚀
 
-[Features](#-features) • [Installation](#-installation) • [Usage](#-usage) • [Building](#-building-from-source) • [Contributing](#-contributing)
+[Features](#-features) • [Installation](#-installation) • [Usage](#-usage) • [Building](##-building-from-source)
 
 </div>
 
@@ -197,21 +197,6 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 ## 🙏 Acknowledgments
 
 - [Dokan Project](https://github.com/dokan-dev/dokany) - User mode file system library for Windows
-- All the amazing open-source libraries that made this project possible
-- The WPF and .NET communities for their excellent documentation and support
 - <a href="https://www.flaticon.com/free-icons/web-server" title="web server icons">Application icon created by Muhamad Ulum - Flaticon</a>
 
-## 👤 Author
-
-**Alex**
-- GitHub: [@player-alex](https://github.com/player-alex)
-
 ---
-
-<div align="center">
-
-**⭐ Star this repository if you find it helpful!**
-
-Made with ❤️ by [Alex](https://github.com/player-alex)
-
-</div>
