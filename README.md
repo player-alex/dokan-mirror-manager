@@ -10,7 +10,7 @@
 
 **A modern WPF application for managing Dokan file system mirrors with an intuitive user interface** 🚀
 
-[Features](#-features) • [Installation](#-installation) • [Usage](#-usage) • [Building](#building-from-source)
+[Features](#-features) • [Installation](#-installation) • [Usage](#-usage) • [Building](#-building-from-source)
 
 </div>
 
