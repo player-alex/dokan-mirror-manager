@@ -16,6 +16,7 @@ public class MountItem : PropertyChangedBase
     private string _sourcePath = string.Empty;
     private string _destinationLetter = string.Empty;
     private bool _isReadOnly;
+    private bool _autoMount;
     private MountStatus _status = MountStatus.Unmounted;
     private string _errorMessage = string.Empty;
 
@@ -47,6 +48,16 @@ public class MountItem : PropertyChangedBase
         {
             _isReadOnly = value;
             NotifyOfPropertyChange(() => IsReadOnly);
+        }
+    }
+
+    public bool AutoMount
+    {
+        get => _autoMount;
+        set
+        {
+            _autoMount = value;
+            NotifyOfPropertyChange(() => AutoMount);
         }
     }
 

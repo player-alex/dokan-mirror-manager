@@ -307,6 +307,10 @@ public class ShellViewModel : Screen
             MountItems.Add(mountItem);
 
             UpdateAllAvailableDriveLetters();
+
+            // Auto-select first available drive letter
+            AutoSelectDriveLetter(mountItem);
+
             SaveConfiguration();
             StatusMessage = $"Added: {sourcePath}";
         }
@@ -498,6 +502,48 @@ public class ShellViewModel : Screen
         if (e.PropertyName == nameof(MountItem.Status) || e.PropertyName == nameof(MountItem.DestinationLetter))
         {
             UpdateAllAvailableDriveLetters();
+
+            // After updating available drive letters, check if any unmounted items need auto-selection
+            // This handles the case where a user manually selects a drive letter that was being used by another unmounted item
+            try
+            {
+                _isUpdatingDriveLetters = true;
+                foreach (var item in MountItems)
+                {
+                    if (item.Status == MountStatus.Unmounted || item.Status == MountStatus.Error)
+                    {
+                        AutoSelectDriveLetter(item);
+                    }
+                }
+            }
+            finally
+            {
+                _isUpdatingDriveLetters = false;
+            }
+        }
+
+        // Save configuration when AutoMount, IsReadOnly, or DestinationLetter changes
+        if (e.PropertyName == nameof(MountItem.AutoMount) ||
+            e.PropertyName == nameof(MountItem.IsReadOnly) ||
+            e.PropertyName == nameof(MountItem.DestinationLetter))
+        {
+            SaveConfiguration();
+        }
+    }
+
+    private void AutoSelectDriveLetter(MountItem item)
+    {
+        // 이미 드라이브 레터가 있고 사용 가능하면 그대로 유지
+        if (!string.IsNullOrEmpty(item.DestinationLetter) &&
+            item.AvailableDriveLetters.Contains(item.DestinationLetter))
+        {
+            return;
+        }
+
+        // 사용 가능한 첫 번째 드라이브 레터 선택
+        if (item.AvailableDriveLetters.Count > 0)
+        {
+            item.DestinationLetter = item.AvailableDriveLetters[0];
         }
     }
 
@@ -515,14 +561,14 @@ public class ShellViewModel : Screen
 
             foreach (var item in MountItems)
             {
-                // Get letters used by OTHER mounted items
-                var otherMountedLetters = MountItems
-                    .Where(m => m != item && m.Status == MountStatus.Mounted && !string.IsNullOrEmpty(m.DestinationLetter))
+                // Get letters used by OTHER items (both mounted and unmounted with selected letters)
+                var otherUsedLetters = MountItems
+                    .Where(m => m != item && !string.IsNullOrEmpty(m.DestinationLetter))
                     .Select(m => m.DestinationLetter)
                     .ToHashSet();
 
-                // Available letters = all letters - system used - other mounted
-                var available = allLetters.Where(letter => !usedLetters.Contains(letter) && !otherMountedLetters.Contains(letter)).ToList();
+                // Available letters = all letters - system used - other items' selected letters
+                var available = allLetters.Where(letter => !usedLetters.Contains(letter) && !otherUsedLetters.Contains(letter)).ToList();
 
                 // If this item has a selected letter, make sure it's in the list
                 if (!string.IsNullOrEmpty(item.DestinationLetter) && !available.Contains(item.DestinationLetter))
@@ -541,6 +587,15 @@ public class ShellViewModel : Screen
         finally
         {
             _isUpdatingDriveLetters = false;
+
+            // Check if any item's selected drive letter is no longer available
+            foreach (var item in MountItems)
+            {
+                if (item.Status == MountStatus.Unmounted || item.Status == MountStatus.Error)
+                {
+                    AutoSelectDriveLetter(item);
+                }
+            }
         }
     }
 
@@ -560,10 +615,15 @@ public class ShellViewModel : Screen
             {
                 foreach (var dto in items)
                 {
+                    // Expand environment variables in SourcePath
+                    // e.g., %USERPROFILE%\Desktop -> C:\Users\Username\Desktop
+                    var expandedSourcePath = Environment.ExpandEnvironmentVariables(dto.SourcePath);
+
                     var mountItem = new MountItem
                     {
-                        SourcePath = dto.SourcePath,
+                        SourcePath = expandedSourcePath,
                         DestinationLetter = dto.DestinationLetter,
+                        AutoMount = dto.AutoMount,
                         IsReadOnly = dto.IsReadOnly,
                         Status = MountStatus.Unmounted
                     };
@@ -573,6 +633,36 @@ public class ShellViewModel : Screen
                 }
 
                 UpdateAllAvailableDriveLetters();
+
+                // Auto-select drive letters for all loaded items
+                // Track used drive letters to handle duplicates in mounts.json
+                var usedDriveLetters = new HashSet<string>();
+
+                foreach (var item in MountItems)
+                {
+                    // If this item's drive letter is already used by a previous item in the load, clear it
+                    if (!string.IsNullOrEmpty(item.DestinationLetter) && usedDriveLetters.Contains(item.DestinationLetter))
+                    {
+                        item.DestinationLetter = string.Empty;
+                    }
+
+                    AutoSelectDriveLetter(item);
+
+                    // Track this item's selected drive letter
+                    if (!string.IsNullOrEmpty(item.DestinationLetter))
+                    {
+                        usedDriveLetters.Add(item.DestinationLetter);
+                    }
+
+                    // Update available drive letters after each assignment to prevent duplicates
+                    UpdateAllAvailableDriveLetters();
+                }
+
+                // Auto-mount items that have AutoMount enabled
+                foreach (var item in MountItems.Where(m => m.AutoMount && m.CanMount))
+                {
+                    Mount(item);
+                }
             }
         }
         catch (Exception ex)
@@ -590,6 +680,7 @@ public class ShellViewModel : Screen
             {
                 SourcePath = m.SourcePath,
                 DestinationLetter = m.DestinationLetter,
+                AutoMount = m.AutoMount,
                 IsReadOnly = m.IsReadOnly
             }).ToList();
 
@@ -640,6 +731,7 @@ public class ShellViewModel : Screen
     {
         public string SourcePath { get; set; } = string.Empty;
         public string DestinationLetter { get; set; } = string.Empty;
+        public bool AutoMount { get; set; }
         public bool IsReadOnly { get; set; }
     }
 }

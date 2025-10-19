@@ -19,8 +19,10 @@
 ## ✨ Features
 
 - 🗂️ **Multiple Mount Management** - Create and manage multiple mirror mounts simultaneously
-- 💾 **Drive Letter Selection** - Choose available drive letters from a dropdown menu
+- 💾 **Smart Drive Letter Selection** - Automatically assigns available drive letters, prevents conflicts
+- 🤖 **Auto-Mount on Startup** - Configure mounts to automatically mount when the application starts
 - 🔒 **Read-Only Mode** - Mount mirrors in read-only mode for data protection (enabled by default)
+- 🌍 **Environment Variable Support** - Use environment variables in paths (e.g., `%USERPROFILE%\Desktop`)
 - 🎯 **System Tray Support** - Minimize to system tray with notification support
 - ⚡ **Single Instance** - Only one application instance runs at a time; launching again restores the window
 - 🔄 **Auto-Unmount** - Automatically unmount drives on application exit with confirmation
@@ -55,9 +57,10 @@
 
 1. Click the **Add** button
 2. Select a source directory or drive using the folder browser
-3. Choose an available drive letter from the dropdown
-4. **Read Only** mode is enabled by default for safety
-5. Click the **Mount** 📂 button to mount the drive
+3. A drive letter is **automatically assigned** from available letters
+4. Optionally enable **Auto Mount** to automatically mount on application startup
+5. **Read Only** mode is enabled by default for safety
+6. Click the **Mount** 📂 button to mount the drive
 
 ### 🔄 Mounting/Unmounting
 
@@ -133,11 +136,43 @@ See [Loader.cs.example](dokan-mirror-manager/Loader.cs.example) for C/C++ usage 
 Mount configurations are automatically saved to `mounts.json` in the application directory.
 
 **Configuration includes:**
-- 📁 Source paths
+- 📁 Source paths (supports environment variables)
 - 💾 Destination drive letters
+- 🤖 Auto-mount settings
 - 🔒 Read-only settings
 
 The configuration file is created automatically on first mount and updated whenever changes are made.
+
+### Environment Variables
+
+You can use Windows environment variables in source paths within `mounts.json`:
+
+```json
+[
+  {
+    "SourcePath": "%USERPROFILE%\\Desktop",
+    "DestinationLetter": "Z:\\",
+    "AutoMount": true,
+    "IsReadOnly": true
+  }
+]
+```
+
+**Supported variables:**
+- `%USERPROFILE%` - User's home directory
+- `%APPDATA%` - Application data folder
+- `%LOCALAPPDATA%` - Local application data folder
+- `%ProgramFiles%` - Program Files directory
+- `%TEMP%` - Temporary files directory
+- Any other Windows environment variables
+
+### Smart Drive Letter Management
+
+The application automatically manages drive letters to prevent conflicts:
+- **Auto-Assignment**: Automatically assigns available drive letters when adding new mounts
+- **Conflict Resolution**: If a drive letter is already in use, automatically selects the next available one
+- **Duplicate Handling**: When loading from `mounts.json`, duplicates are automatically resolved
+- **Dynamic Updates**: Drive letter dropdowns update in real-time based on availability
 
 ## 🔧 Technologies Used
 

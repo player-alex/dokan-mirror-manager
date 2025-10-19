@@ -73,6 +73,17 @@
                         </GridViewColumn.CellTemplate>
                     </GridViewColumn>
 
+                    <!-- Auto Mount Column -->
+                    <GridViewColumn Header="Auto Mount" Width="90">
+                        <GridViewColumn.CellTemplate>
+                            <DataTemplate>
+                                <CheckBox IsChecked="{Binding AutoMount}"
+                                         HorizontalAlignment="Center"
+                                         IsEnabled="{Binding CanEditDestination}"/>
+                            </DataTemplate>
+                        </GridViewColumn.CellTemplate>
+                    </GridViewColumn>
+
                     <!-- Read/Write Column -->
                     <GridViewColumn Header="Read Only" Width="80">
                         <GridViewColumn.CellTemplate>
