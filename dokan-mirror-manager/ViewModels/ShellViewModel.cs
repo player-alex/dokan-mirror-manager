@@ -398,12 +398,13 @@ public class ShellViewModel : Screen
 
                 System.Diagnostics.Debug.WriteLine("[Mount] Build() completed successfully");
 
-                // Update UI on success
+                // Update status immediately (before UI update) to avoid race conditions
+                item.Status = MountStatus.Mounted;
+
+                // Update UI on success (non-blocking)
                 System.Windows.Application.Current.Dispatcher.BeginInvoke(() =>
                 {
-                    item.Status = MountStatus.Mounted;
                     StatusMessage = $"Mounted {item.SourcePath} to {item.DestinationLetter}";
-                    SaveConfiguration();
                 });
 
                 System.Diagnostics.Debug.WriteLine("[Mount] Waiting for file system to close");
@@ -533,17 +534,26 @@ public class ShellViewModel : Screen
 
     private void AutoSelectDriveLetter(MountItem item)
     {
+        System.Diagnostics.Debug.WriteLine($"[AutoSelect] Item: {item.SourcePath}, Current: {item.DestinationLetter}, Status: {item.Status}, Available count: {item.AvailableDriveLetters.Count}");
+
         // 이미 드라이브 레터가 있고 사용 가능하면 그대로 유지
         if (!string.IsNullOrEmpty(item.DestinationLetter) &&
             item.AvailableDriveLetters.Contains(item.DestinationLetter))
         {
+            System.Diagnostics.Debug.WriteLine($"[AutoSelect] Keeping current: {item.DestinationLetter}");
             return;
         }
 
         // 사용 가능한 첫 번째 드라이브 레터 선택
         if (item.AvailableDriveLetters.Count > 0)
         {
+            var oldLetter = item.DestinationLetter;
             item.DestinationLetter = item.AvailableDriveLetters[0];
+            System.Diagnostics.Debug.WriteLine($"[AutoSelect] Changed from '{oldLetter}' to '{item.DestinationLetter}'");
+        }
+        else
+        {
+            System.Diagnostics.Debug.WriteLine($"[AutoSelect] No available letters!");
         }
     }
 
@@ -573,11 +583,20 @@ public class ShellViewModel : Screen
                 // If this item has a selected letter, make sure it's in the list
                 if (!string.IsNullOrEmpty(item.DestinationLetter) && !available.Contains(item.DestinationLetter))
                 {
-                    available.Add(item.DestinationLetter);
-                    available.Sort();
+                    if (item.Status == MountStatus.Mounted || !usedLetters.Contains(item.DestinationLetter))
+                    {
+                        System.Diagnostics.Debug.WriteLine($"[UpdateAvail] Adding {item.DestinationLetter} for {item.SourcePath} (Status: {item.Status})");
+                        available.Add(item.DestinationLetter);
+                        available.Sort();
+                    }
+                    else
+                    {
+                        System.Diagnostics.Debug.WriteLine($"[UpdateAvail] NOT adding {item.DestinationLetter} for {item.SourcePath} (in use by system)");
+                    }
                 }
 
                 item.AvailableDriveLetters = available;
+                System.Diagnostics.Debug.WriteLine($"[UpdateAvail] {item.SourcePath}: Dest={item.DestinationLetter}, Available=[{string.Join(", ", available)}]");
             }
         }
         catch (Exception ex)
@@ -622,6 +641,7 @@ public class ShellViewModel : Screen
                     var mountItem = new MountItem
                     {
                         SourcePath = expandedSourcePath,
+                        OriginalSourcePath = dto.SourcePath, // Keep original path with env vars
                         DestinationLetter = dto.DestinationLetter,
                         AutoMount = dto.AutoMount,
                         IsReadOnly = dto.IsReadOnly,
@@ -658,11 +678,28 @@ public class ShellViewModel : Screen
                     UpdateAllAvailableDriveLetters();
                 }
 
-                // Auto-mount items that have AutoMount enabled
-                foreach (var item in MountItems.Where(m => m.AutoMount && m.CanMount))
+                // Auto-mount items that have AutoMount enabled (sequentially to avoid conflicts)
+                Task.Run(async () =>
                 {
-                    Mount(item);
-                }
+                    foreach (var item in MountItems.Where(m => m.AutoMount && m.CanMount).ToList())
+                    {
+                        await System.Windows.Application.Current.Dispatcher.InvokeAsync(() =>
+                        {
+                            Mount(item);
+                        });
+
+                        // Wait for mount to complete before starting next one
+                        var timeout = 0;
+                        while (item.Status == MountStatus.Mounting && timeout < 100)
+                        {
+                            await Task.Delay(100);
+                            timeout++;
+                        }
+
+                        // Small delay between mounts to ensure Dokan is ready
+                        await Task.Delay(500);
+                    }
+                });
             }
         }
         catch (Exception ex)
@@ -678,7 +715,8 @@ public class ShellViewModel : Screen
             var configPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, ConfigFileName);
             var items = MountItems.Select(m => new MountItemDto
             {
-                SourcePath = m.SourcePath,
+                // Save original path (with environment variables) if available
+                SourcePath = string.IsNullOrEmpty(m.OriginalSourcePath) ? m.SourcePath : m.OriginalSourcePath,
                 DestinationLetter = m.DestinationLetter,
                 AutoMount = m.AutoMount,
                 IsReadOnly = m.IsReadOnly

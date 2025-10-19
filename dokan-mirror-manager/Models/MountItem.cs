@@ -14,6 +14,7 @@ public enum MountStatus
 public class MountItem : PropertyChangedBase
 {
     private string _sourcePath = string.Empty;
+    private string _originalSourcePath = string.Empty; // Original path with environment variables
     private string _destinationLetter = string.Empty;
     private bool _isReadOnly;
     private bool _autoMount;
@@ -28,6 +29,13 @@ public class MountItem : PropertyChangedBase
             _sourcePath = value;
             NotifyOfPropertyChange(() => SourcePath);
         }
+    }
+
+    // Original source path (may contain environment variables like %USERPROFILE%)
+    public string OriginalSourcePath
+    {
+        get => _originalSourcePath;
+        set => _originalSourcePath = value;
     }
 
     public string DestinationLetter

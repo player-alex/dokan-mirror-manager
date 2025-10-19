@@ -7,7 +7,8 @@
       "Bash(Select-String -Pattern \"error CS\")",
       "Bash(Select-Object -First 5)",
       "Bash(dotnet build:*)",
-      "Bash(dir:*)"
+      "Bash(dir:*)",
+      "mcp__sequential-thinking__sequentialthinking"
     ],
     "deny": [],
     "ask": []
