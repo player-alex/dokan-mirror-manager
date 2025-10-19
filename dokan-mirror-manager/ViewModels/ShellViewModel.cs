@@ -534,26 +534,17 @@ public class ShellViewModel : Screen
 
     private void AutoSelectDriveLetter(MountItem item)
     {
-        System.Diagnostics.Debug.WriteLine($"[AutoSelect] Item: {item.SourcePath}, Current: {item.DestinationLetter}, Status: {item.Status}, Available count: {item.AvailableDriveLetters.Count}");
-
         // 이미 드라이브 레터가 있고 사용 가능하면 그대로 유지
         if (!string.IsNullOrEmpty(item.DestinationLetter) &&
             item.AvailableDriveLetters.Contains(item.DestinationLetter))
         {
-            System.Diagnostics.Debug.WriteLine($"[AutoSelect] Keeping current: {item.DestinationLetter}");
             return;
         }
 
         // 사용 가능한 첫 번째 드라이브 레터 선택
         if (item.AvailableDriveLetters.Count > 0)
         {
-            var oldLetter = item.DestinationLetter;
             item.DestinationLetter = item.AvailableDriveLetters[0];
-            System.Diagnostics.Debug.WriteLine($"[AutoSelect] Changed from '{oldLetter}' to '{item.DestinationLetter}'");
-        }
-        else
-        {
-            System.Diagnostics.Debug.WriteLine($"[AutoSelect] No available letters!");
         }
     }
 
@@ -585,18 +576,12 @@ public class ShellViewModel : Screen
                 {
                     if (item.Status == MountStatus.Mounted || !usedLetters.Contains(item.DestinationLetter))
                     {
-                        System.Diagnostics.Debug.WriteLine($"[UpdateAvail] Adding {item.DestinationLetter} for {item.SourcePath} (Status: {item.Status})");
                         available.Add(item.DestinationLetter);
                         available.Sort();
-                    }
-                    else
-                    {
-                        System.Diagnostics.Debug.WriteLine($"[UpdateAvail] NOT adding {item.DestinationLetter} for {item.SourcePath} (in use by system)");
                     }
                 }
 
                 item.AvailableDriveLetters = available;
-                System.Diagnostics.Debug.WriteLine($"[UpdateAvail] {item.SourcePath}: Dest={item.DestinationLetter}, Available=[{string.Join(", ", available)}]");
             }
         }
         catch (Exception ex)
