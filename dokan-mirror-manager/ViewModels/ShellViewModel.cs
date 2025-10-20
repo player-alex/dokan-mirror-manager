@@ -1,5 +1,6 @@
 using Caliburn.Micro;
 using DokanMirrorManager.Models;
+using DokanMirrorManager.Utils;
 using DokanNet;
 using System.Collections.ObjectModel;
 using System.ComponentModel;
@@ -11,6 +12,7 @@ using System.Linq;
 using Hardcodet.Wpf.TaskbarNotification;
 using System.Windows.Interop;
 using System.Runtime.InteropServices;
+using System.Windows.Threading;
 
 namespace DokanMirrorManager.ViewModels;
 
@@ -457,11 +459,26 @@ public class ShellViewModel : Screen
         if (item.Status != MountStatus.Mounted)
             return;
 
-        StatusMessage = $"Unmounting {item.DestinationLetter}...";
+        var driveLetter = item.DestinationLetter;
+        StatusMessage = $"Unmounting {driveLetter}...";
+
+        // Setup progress indicator with elapsed time
+        var startTime = DateTime.Now;
+        var updateTimer = new DispatcherTimer
+        {
+            Interval = TimeSpan.FromSeconds(1)
+        };
+        updateTimer.Tick += (s, e) =>
+        {
+            var elapsed = (DateTime.Now - startTime).TotalSeconds;
+            StatusMessage = $"Unmounting {driveLetter}... ({elapsed:F0}s)";
+        };
+        updateTimer.Start();
 
         try
         {
-            await Task.Run(() =>
+            // Create unmount task
+            var unmountTask = Task.Run(() =>
             {
                 if (!string.IsNullOrEmpty(item.DestinationLetter))
                 {
@@ -476,15 +493,196 @@ public class ShellViewModel : Screen
                 item.Mirror = null;
             });
 
-            item.Status = MountStatus.Unmounted;
-            item.ErrorMessage = string.Empty;
-            StatusMessage = $"Unmounted {item.DestinationLetter}";
-            SaveConfiguration();
+            // Wait with timeout (10 seconds initial timeout)
+            var timeoutTask = Task.Delay(TimeSpan.FromSeconds(10));
+            var completedTask = await Task.WhenAny(unmountTask, timeoutTask);
+
+            if (completedTask == unmountTask)
+            {
+                // Unmount completed successfully
+                await unmountTask; // Propagate any exceptions
+                updateTimer.Stop();
+                item.Status = MountStatus.Unmounted;
+                item.ErrorMessage = string.Empty;
+                StatusMessage = $"Unmounted {driveLetter}";
+                SaveConfiguration();
+            }
+            else
+            {
+                // Timeout occurred - ask user
+                updateTimer.Stop();
+                var elapsed = (DateTime.Now - startTime).TotalSeconds;
+
+                // Check for processes using the drive (only when timeout occurs)
+                var processCheckMessage = "";
+                try
+                {
+                    var processesUsingDrive = await Task.Run(() =>
+                        DriveHandleDetector.GetProcessesUsingDrive(driveLetter));
+
+                    if (processesUsingDrive.Any())
+                    {
+                        var processNames = string.Join("\n  • ", processesUsingDrive.Take(5));
+                        if (processesUsingDrive.Count > 5)
+                        {
+                            processNames += $"\n  • ... and {processesUsingDrive.Count - 5} more";
+                        }
+                        processCheckMessage = $"\n\nProcesses using this drive:\n  • {processNames}\n";
+                    }
+                }
+                catch
+                {
+                    // Ignore errors during process detection
+                }
+
+                var result = MessageBox.Show(
+                    GetView() as Window,
+                    $"Unmounting {driveLetter} is taking longer than expected ({elapsed:F0} seconds).\n\n" +
+                    "This usually happens when:\n" +
+                    "  • Another process is using files on the drive\n" +
+                    "  • Windows Explorer is browsing the drive\n" +
+                    "  • A background service is accessing files" +
+                    processCheckMessage + "\n\n" +
+                    "Do you want to continue waiting?",
+                    "Unmount Timeout",
+                    MessageBoxButton.YesNoCancel,
+                    MessageBoxImage.Warning);
+
+                if (result == MessageBoxResult.Yes)
+                {
+                    // Continue waiting (extend timeout to 30 more seconds)
+                    StatusMessage = $"Still unmounting {driveLetter}...";
+                    updateTimer.Start();
+
+                    var extendedTimeoutTask = Task.Delay(TimeSpan.FromSeconds(30));
+                    var extendedCompletedTask = await Task.WhenAny(unmountTask, extendedTimeoutTask);
+
+                    updateTimer.Stop();
+
+                    if (extendedCompletedTask == unmountTask)
+                    {
+                        await unmountTask;
+                        item.Status = MountStatus.Unmounted;
+                        item.ErrorMessage = string.Empty;
+                        StatusMessage = $"Unmounted {driveLetter}";
+                        SaveConfiguration();
+                    }
+                    else
+                    {
+                        // Still timed out after extended wait
+                        StatusMessage = $"Unmount of {driveLetter} is still in progress...";
+                        MessageBox.Show(
+                            GetView() as Window,
+                            $"Unmount is still in progress after {(DateTime.Now - startTime).TotalSeconds:F0} seconds.\n\n" +
+                            "The unmount will continue in the background.\n" +
+                            "Please close any programs using the drive and wait for completion.",
+                            "Unmount Taking Long Time",
+                            MessageBoxButton.OK,
+                            MessageBoxImage.Information);
+
+                        // Continue waiting in background
+                        _ = Task.Run(async () =>
+                        {
+                            try
+                            {
+                                await unmountTask;
+                                await Application.Current.Dispatcher.InvokeAsync(() =>
+                                {
+                                    item.Status = MountStatus.Unmounted;
+                                    item.ErrorMessage = string.Empty;
+                                    StatusMessage = $"Unmounted {driveLetter} (completed in background)";
+                                    SaveConfiguration();
+                                });
+                            }
+                            catch (Exception ex)
+                            {
+                                await Application.Current.Dispatcher.InvokeAsync(() =>
+                                {
+                                    StatusMessage = $"Background unmount failed: {ex.Message}";
+                                    item.ErrorMessage = ex.Message;
+                                });
+                            }
+                        });
+                    }
+                }
+                else if (result == MessageBoxResult.No)
+                {
+                    // User chose to cancel - but we can't really cancel the unmount once started
+                    StatusMessage = $"Unmount of {driveLetter} will continue in background...";
+                    MessageBox.Show(
+                        GetView() as Window,
+                        "Note: The unmount operation cannot be cancelled once started.\n" +
+                        "It will continue in the background.\n\n" +
+                        "The drive will be unmounted when all file handles are released.",
+                        "Unmount Continuing",
+                        MessageBoxButton.OK,
+                        MessageBoxImage.Information);
+
+                    // Continue in background
+                    _ = Task.Run(async () =>
+                    {
+                        try
+                        {
+                            await unmountTask;
+                            await Application.Current.Dispatcher.InvokeAsync(() =>
+                            {
+                                item.Status = MountStatus.Unmounted;
+                                item.ErrorMessage = string.Empty;
+                                StatusMessage = $"Unmounted {driveLetter} (completed in background)";
+                                SaveConfiguration();
+                            });
+                        }
+                        catch (Exception ex)
+                        {
+                            await Application.Current.Dispatcher.InvokeAsync(() =>
+                            {
+                                StatusMessage = $"Background unmount failed: {ex.Message}";
+                                item.ErrorMessage = ex.Message;
+                            });
+                        }
+                    });
+                }
+                else // Cancel
+                {
+                    // Same as No - continue in background
+                    StatusMessage = $"Unmount of {driveLetter} continuing in background...";
+
+                    _ = Task.Run(async () =>
+                    {
+                        try
+                        {
+                            await unmountTask;
+                            await Application.Current.Dispatcher.InvokeAsync(() =>
+                            {
+                                item.Status = MountStatus.Unmounted;
+                                item.ErrorMessage = string.Empty;
+                                StatusMessage = $"Unmounted {driveLetter}";
+                                SaveConfiguration();
+                            });
+                        }
+                        catch (Exception ex)
+                        {
+                            await Application.Current.Dispatcher.InvokeAsync(() =>
+                            {
+                                StatusMessage = $"Background unmount failed: {ex.Message}";
+                                item.ErrorMessage = ex.Message;
+                            });
+                        }
+                    });
+                }
+            }
         }
         catch (Exception ex)
         {
+            updateTimer.Stop();
             StatusMessage = $"Failed to unmount: {ex.Message}";
-            MessageBox.Show($"Failed to unmount {item.DestinationLetter}: {ex.Message}", "Unmount Error", MessageBoxButton.OK, MessageBoxImage.Error);
+            item.ErrorMessage = ex.Message;
+            MessageBox.Show(
+                GetView() as Window,
+                $"Failed to unmount {driveLetter}:\n\n{ex.Message}",
+                "Unmount Error",
+                MessageBoxButton.OK,
+                MessageBoxImage.Error);
         }
     }
 

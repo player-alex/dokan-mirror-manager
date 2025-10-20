@@ -29,7 +29,8 @@
 - 💾 **Persistent Configuration** - Save and restore mount configurations between sessions
 - 🏷️ **Dynamic Volume Labels** - Automatically sets volume labels based on source (drive label or folder name)
 - 🎨 **Modern UI** - Built with MahApps.Metro for a clean, modern interface
-- 🚀 **Non-Blocking Operations** - Async unmount operations keep UI responsive
+- 🚀 **Non-Blocking Operations** - Async mount/unmount operations keep UI responsive
+- ⏱️ **Smart Unmount** - Progress tracking with timeout handling and background completion
 
 ## 📸 Screenshots
 
@@ -66,6 +67,9 @@
 
 - **Mount**: Click the folder open icon (📂) next to the mount item
 - **Unmount**: Click the folder remove icon (🗑️) next to the mounted item
+  - Shows elapsed time during unmount: "Unmounting Z:\... (5s)"
+  - If unmount takes longer than expected (>10s), displays timeout dialog with options
+  - Can continue in background if needed
 
 ### ❌ Removing a Mount
 
@@ -222,6 +226,17 @@ The application automatically manages drive letters to prevent conflicts:
 This is normal behavior. The application uses single-instance mode:
 - If the window is hidden in tray, it will be restored automatically
 - If the window is already visible, the existing instance continues running
+
+</details>
+
+<details>
+<summary><b>⏱️ Unmount is taking a long time</b></summary>
+
+If unmount takes longer than expected:
+- ✅ Close any programs accessing files on the drive (Explorer, cmd, etc.)
+- ✅ Wait for the timeout dialog to show processes using the drive
+- ✅ Choose to continue waiting or let it complete in background
+- ✅ The drive will unmount automatically when all file handles are released
 
 </details>
 
