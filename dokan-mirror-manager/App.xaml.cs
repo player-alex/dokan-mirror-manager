@@ -27,10 +27,28 @@ namespace DokanMirrorManager
 
             if (!createdNew)
             {
-                // Another instance is already running - activate it
-                ActivateExistingInstance();
-                Current.Shutdown();
-                return;
+                // Try to acquire the mutex in case the previous instance crashed
+                try
+                {
+                    // Wait for 1 second to acquire the mutex
+                    if (_mutex.WaitOne(TimeSpan.FromSeconds(1), false))
+                    {
+                        // Successfully acquired the mutex - previous instance crashed
+                        // Continue with normal startup
+                    }
+                    else
+                    {
+                        // Another instance is actually running - activate it
+                        ActivateExistingInstance();
+                        Current.Shutdown();
+                        return;
+                    }
+                }
+                catch (AbandonedMutexException)
+                {
+                    // Previous instance crashed and left the mutex abandoned
+                    // The mutex is now owned by this thread, continue with normal startup
+                }
             }
 
             // Global exception handlers
