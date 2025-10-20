@@ -388,7 +388,11 @@ public class ShellViewModel : Screen
                 var builder = new DokanInstanceBuilder(_dokan)
                     .ConfigureOptions(options =>
                     {
+#if DEBUG
                         options.Options = DokanOptions.DebugMode | DokanOptions.EnableNotificationAPI;
+#else
+                        options.Options = DokanOptions.EnableNotificationAPI;
+#endif
                         options.MountPoint = item.DestinationLetter;
                     });
 
