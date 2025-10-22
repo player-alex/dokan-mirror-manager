@@ -88,17 +88,18 @@ public class ShellViewModel : Screen
 
         // Critical Fix #4: Capture dispatcher early to avoid null reference
         _dispatcher = Dispatcher.CurrentDispatcher;
-
-        LoadConfiguration();
     }
 
-    protected override void OnViewLoaded(object view)
+    protected override async void OnViewLoaded(object view)
     {
         base.OnViewLoaded(view);
         StatusMessage = "Ready";
 
         InitializeTaskbarIcon(view);
         SetupWindowMessageHook(view);
+
+        // Load configuration and auto-mount asynchronously to avoid blocking UI thread
+        await LoadConfigurationAsync();
     }
 
     private void SetupWindowMessageHook(object view)
@@ -1140,11 +1141,11 @@ public class ShellViewModel : Screen
     }
 
 
-    private void LoadConfiguration()
+    private async Task LoadConfigurationAsync()
     {
         try
         {
-            var items = _configurationService.LoadConfigurationAsync().Result;
+            var items = await _configurationService.LoadConfigurationAsync();
 
             foreach (var mountItem in items)
             {

@@ -49,31 +49,34 @@
 
 ---
 
-## Phase 2: DriveLetterManager 분리
+## Phase 2: DriveLetterManager 분리 ✅ **완료**
 ### 2.1. 인터페이스 정의
-- [ ] 2.1.1. `IDriveLetterManager.cs` 인터페이스 작성
+- [x] 2.1.1. `IDriveLetterManager.cs` 인터페이스 작성
   - `List<string> GetAvailableDriveLetters(IEnumerable<MountItem> items, MountItem? currentItem)`
   - `string? AutoSelectDriveLetter(MountItem item, List<string> availableLetters)`
   - `void UpdateAllDriveLetters(ObservableCollection<MountItem> items)`
 
 ### 2.2. 구현 클래스 작성
-- [ ] 2.2.1. `DriveLetterManager.cs` 클래스 작성
-- [ ] 2.2.2. ShellViewModel.cs에서 다음 코드 추출:
-  - `AvailableDriveLetters` 프로퍼티 로직 (라인 80-100)
+- [x] 2.2.1. `DriveLetterManager.cs` 클래스 작성
+- [x] 2.2.2. ShellViewModel.cs에서 다음 코드 추출:
+  - `AvailableDriveLetters` 프로퍼티 로직 (라인 79-99)
   - `UpdateAllAvailableDriveLetters()` 메서드 (라인 1202-1255)
   - `AutoSelectDriveLetter()` 메서드 (라인 1186-1200)
+  - `_isUpdatingDriveLetters` 플래그 제거
 
 ### 2.3. ShellViewModel 통합
-- [ ] 2.3.1. ShellViewModel에 `IDriveLetterManager` 의존성 주입
-- [ ] 2.3.2. MountItem PropertyChanged 이벤트 핸들러 수정
-- [ ] 2.3.3. 빌드 및 동작 확인
-- [ ] 2.3.4. 커밋: `refactor: Extract DriveLetterManager from ShellViewModel`
+- [x] 2.3.1. ShellViewModel에 `IDriveLetterManager` 의존성 주입
+- [x] 2.3.2. MountItem PropertyChanged 이벤트 핸들러 수정
+- [x] 2.3.3. App.xaml.cs에 서비스 등록
+- [x] 2.3.4. 빌드 및 동작 확인
+- [ ] 2.3.5. 커밋: `refactor: Extract DriveLetterManager from ShellViewModel` - 사용자가 커밋 관리
 
-**예상 코드량**:
-- DriveLetterManager.cs: ~180줄
-- ShellViewModel.cs 감소: ~150줄
+**실제 코드량**:
+- IDriveLetterManager.cs: 32줄
+- DriveLetterManager.cs: 161줄
+- ShellViewModel.cs 감소: ~140줄
 
-**예상 컨텍스트 사용량**: 15%
+**실제 컨텍스트 사용량**: 66% (132k/200k)
 
 ---
 
@@ -244,7 +247,8 @@
 ## 현재 진행 상태
 - [x] **Phase 0 완료** (디렉토리 구조 준비)
 - [x] **Phase 1 완료** (ConfigurationService 분리 및 통합)
-- [ ] **Phase 2 대기 중** (DriveLetterManager 분리)
+- [x] **Phase 2 완료** (DriveLetterManager 분리 및 통합)
+- [ ] **Phase 3 대기 중** (TrayIconManager 분리)
 
 ---
 
