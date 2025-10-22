@@ -21,12 +21,12 @@ public class ShellViewModel : Screen
 {
     private readonly IWindowManager _windowManager;
     private readonly IConfigurationService _configurationService;
+    private readonly IDriveLetterManager _driveLetterManager;
     private readonly Dokan _dokan;
     private string _statusMessage = string.Empty;
     private MountItem? _selectedItem;
     private TaskbarIcon? _taskbarIcon;
     private bool _isClosingToTray = false;
-    private bool _isUpdatingDriveLetters = false;
     private bool _isHiding = false;
     private const int WM_SHOWWINDOW_CUSTOM = 0x8001;
     private HwndSource? _hwndSource;
@@ -76,32 +76,13 @@ public class ShellViewModel : Screen
 
     public bool CanRemoveMount => SelectedItem != null && SelectedItem.Status != MountStatus.Mounted && SelectedItem.Status != MountStatus.Mounting;
 
-    public List<string> AvailableDriveLetters
-    {
-        get
-        {
-            try
-            {
-                var allLetters = Enumerable.Range('A', 26).Select(i => $"{(char)i}:\\").ToList();
-                var usedLetters = DriveInfo.GetDrives().Select(d => d.Name).ToHashSet();
-                var mountedLetters = MountItems.Where(m => m.Status == MountStatus.Mounted && !string.IsNullOrEmpty(m.DestinationLetter))
-                    .Select(m => m.DestinationLetter)
-                    .ToHashSet();
+    public List<string> AvailableDriveLetters => _driveLetterManager.GetAvailableDriveLetters(MountItems, null);
 
-                return allLetters.Where(letter => !usedLetters.Contains(letter) && !mountedLetters.Contains(letter)).ToList();
-            }
-            catch (Exception ex)
-            {
-                StatusMessage = $"Error getting drive letters: {ex.Message}";
-                return new List<string>();
-            }
-        }
-    }
-
-    public ShellViewModel(IWindowManager windowManager, IConfigurationService configurationService)
+    public ShellViewModel(IWindowManager windowManager, IConfigurationService configurationService, IDriveLetterManager driveLetterManager)
     {
         _windowManager = windowManager;
         _configurationService = configurationService;
+        _driveLetterManager = driveLetterManager;
         _dokan = new Dokan(null!); // Dokan library accepts null for default logger
         DisplayName = "Dokan Mirror Manager";
 
@@ -323,10 +304,7 @@ public class ShellViewModel : Screen
             // Critical Fix #1: Initialize semaphore for this mount item
             _mountLocks.TryAdd(mountItem, new SemaphoreSlim(1, 1));
 
-            UpdateAllAvailableDriveLetters();
-
-            // Auto-select first available drive letter
-            AutoSelectDriveLetter(mountItem);
+            _driveLetterManager.UpdateAllDriveLetters(MountItems);
 
             SaveConfigurationAsync();
             StatusMessage = $"Added: {sourcePath}";
@@ -369,7 +347,7 @@ public class ShellViewModel : Screen
                 }
             }
 
-            UpdateAllAvailableDriveLetters();
+            _driveLetterManager.UpdateAllDriveLetters(MountItems);
             SaveConfigurationAsync();
             StatusMessage = $"Removed: {itemToRemove.SourcePath}";
         }
@@ -1147,31 +1125,9 @@ public class ShellViewModel : Screen
     private void MountItem_PropertyChanged(object? sender, PropertyChangedEventArgs e)
     {
         // Update available drive letters for all items when mount status or destination changes
-        // Ignore changes while we're updating to avoid infinite loop
-        if (_isUpdatingDriveLetters)
-            return;
-
         if (e.PropertyName == nameof(MountItem.Status) || e.PropertyName == nameof(MountItem.DestinationLetter))
         {
-            UpdateAllAvailableDriveLetters();
-
-            // After updating available drive letters, check if any unmounted items need auto-selection
-            // This handles the case where a user manually selects a drive letter that was being used by another unmounted item
-            try
-            {
-                _isUpdatingDriveLetters = true;
-                foreach (var item in MountItems)
-                {
-                    if (item.Status == MountStatus.Unmounted || item.Status == MountStatus.Error)
-                    {
-                        AutoSelectDriveLetter(item);
-                    }
-                }
-            }
-            finally
-            {
-                _isUpdatingDriveLetters = false;
-            }
+            _driveLetterManager.UpdateAllDriveLetters(MountItems);
         }
 
         // Save configuration when AutoMount, IsReadOnly, or DestinationLetter changes
@@ -1183,76 +1139,6 @@ public class ShellViewModel : Screen
         }
     }
 
-    private void AutoSelectDriveLetter(MountItem item)
-    {
-        // 이미 드라이브 레터가 있고 사용 가능하면 그대로 유지
-        if (!string.IsNullOrEmpty(item.DestinationLetter) &&
-            item.AvailableDriveLetters.Contains(item.DestinationLetter))
-        {
-            return;
-        }
-
-        // 사용 가능한 첫 번째 드라이브 레터 선택
-        if (item.AvailableDriveLetters.Count > 0)
-        {
-            item.DestinationLetter = item.AvailableDriveLetters[0];
-        }
-    }
-
-    private void UpdateAllAvailableDriveLetters()
-    {
-        if (_isUpdatingDriveLetters)
-            return;
-
-        try
-        {
-            _isUpdatingDriveLetters = true;
-
-            var allLetters = Enumerable.Range('A', 26).Select(i => $"{(char)i}:\\").ToList();
-            var usedLetters = DriveInfo.GetDrives().Select(d => d.Name).ToHashSet();
-
-            foreach (var item in MountItems)
-            {
-                // Get letters used by OTHER items (both mounted and unmounted with selected letters)
-                var otherUsedLetters = MountItems
-                    .Where(m => m != item && !string.IsNullOrEmpty(m.DestinationLetter))
-                    .Select(m => m.DestinationLetter)
-                    .ToHashSet();
-
-                // Available letters = all letters - system used - other items' selected letters
-                var available = allLetters.Where(letter => !usedLetters.Contains(letter) && !otherUsedLetters.Contains(letter)).ToList();
-
-                // If this item has a selected letter, make sure it's in the list
-                if (!string.IsNullOrEmpty(item.DestinationLetter) && !available.Contains(item.DestinationLetter))
-                {
-                    if (item.Status == MountStatus.Mounted || !usedLetters.Contains(item.DestinationLetter))
-                    {
-                        available.Add(item.DestinationLetter);
-                        available.Sort();
-                    }
-                }
-
-                item.AvailableDriveLetters = available;
-            }
-        }
-        catch (Exception ex)
-        {
-            StatusMessage = $"Error updating drive letters: {ex.Message}";
-        }
-        finally
-        {
-            _isUpdatingDriveLetters = false;
-
-            // Check if any item's selected drive letter is no longer available
-            foreach (var item in MountItems)
-            {
-                if (item.Status == MountStatus.Unmounted || item.Status == MountStatus.Error)
-                {
-                    AutoSelectDriveLetter(item);
-                }
-            }
-        }
-    }
 
     private void LoadConfiguration()
     {
@@ -1269,7 +1155,7 @@ public class ShellViewModel : Screen
                 _mountLocks.TryAdd(mountItem, new SemaphoreSlim(1, 1));
             }
 
-            UpdateAllAvailableDriveLetters();
+            _driveLetterManager.UpdateAllDriveLetters(MountItems);
 
             // Auto-select drive letters for all loaded items
             // Track used drive letters to handle duplicates in mounts.json
@@ -1283,7 +1169,12 @@ public class ShellViewModel : Screen
                     item.DestinationLetter = string.Empty;
                 }
 
-                AutoSelectDriveLetter(item);
+                var availableLetters = _driveLetterManager.GetAvailableDriveLetters(MountItems, item);
+                var selectedLetter = _driveLetterManager.AutoSelectDriveLetter(item, availableLetters);
+                if (selectedLetter != null)
+                {
+                    item.DestinationLetter = selectedLetter;
+                }
 
                 // Track this item's selected drive letter
                 if (!string.IsNullOrEmpty(item.DestinationLetter))
@@ -1292,7 +1183,7 @@ public class ShellViewModel : Screen
                 }
 
                 // Update available drive letters after each assignment to prevent duplicates
-                UpdateAllAvailableDriveLetters();
+                _driveLetterManager.UpdateAllDriveLetters(MountItems);
             }
 
             // Auto-mount items that have AutoMount enabled (sequentially to avoid conflicts)

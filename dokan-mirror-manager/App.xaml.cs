@@ -112,6 +112,7 @@ namespace DokanMirrorManager
 
             // Register services
             _container.Singleton<IConfigurationService, ConfigurationService>();
+            _container.Singleton<IDriveLetterManager, DriveLetterManager>();
 
             _container.PerRequest<ShellViewModel>();
         }
