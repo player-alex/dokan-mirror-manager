@@ -116,31 +116,33 @@
 
 ---
 
-## Phase 4: MountMonitoringService 분리
+## Phase 4: MountMonitoringService 분리 ✅ **완료**
 ### 4.1. 인터페이스 정의
-- [ ] 4.1.1. `IMountMonitoringService.cs` 인터페이스 작성
+- [x] 4.1.1. `IMountMonitoringService.cs` 인터페이스 작성
   - `Task StartMonitoringAsync(DokanInstance instance, MountItem item, string driveLetter, Action<MountItem> onUnmountDetected)`
   - `void CancelMonitoring(MountItem item)`
   - `void CancelAllMonitoring()`
 
 ### 4.2. 구현 클래스 작성
-- [ ] 4.2.1. `MountMonitoringService.cs` 클래스 작성
-- [ ] 4.2.2. ShellViewModel.cs에서 다음 코드 추출:
-  - `MonitorFileSystemClosure()` 메서드 (라인 762-860)
+- [x] 4.2.1. `MountMonitoringService.cs` 클래스 작성
+- [x] 4.2.2. ShellViewModel.cs에서 다음 코드 추출:
+  - `MonitorFileSystemClosure()` 메서드 (라인 626-719)
   - `_monitoringTokens` ConcurrentDictionary 및 관련 로직
 
 ### 4.3. ShellViewModel 통합
-- [ ] 4.3.1. ShellViewModel에 `IMountMonitoringService` 의존성 주입
-- [ ] 4.3.2. MountInternal 메서드에서 모니터링 시작 호출 수정
-- [ ] 4.3.3. Unmount 메서드에서 모니터링 취소 호출 수정
-- [ ] 4.3.4. 빌드 및 동작 확인
-- [ ] 4.3.5. 커밋: `refactor: Extract MountMonitoringService from ShellViewModel`
+- [x] 4.3.1. ShellViewModel에 `IMountMonitoringService` 의존성 주입
+- [x] 4.3.2. MountInternal 메서드에서 모니터링 시작 호출 수정
+- [x] 4.3.3. Unmount 메서드에서 모니터링 취소 호출 수정
+- [x] 4.3.4. App.xaml.cs에 서비스 등록
+- [x] 4.3.5. 빌드 및 동작 확인
+- [ ] 4.3.6. 커밋: `refactor: Extract MountMonitoringService from ShellViewModel` - 사용자가 커밋 관리
 
-**예상 코드량**:
-- MountMonitoringService.cs: ~180줄
-- ShellViewModel.cs 감소: ~120줄
+**실제 코드량**:
+- IMountMonitoringService.cs: 37줄
+- MountMonitoringService.cs: 133줄
+- ShellViewModel.cs 감소: ~104줄
 
-**예상 컨텍스트 사용량**: 15%
+**실제 컨텍스트 사용량**: 53% (106k/200k)
 
 ---
 
@@ -253,7 +255,8 @@
 - [x] **Phase 1 완료** (ConfigurationService 분리 및 통합)
 - [x] **Phase 2 완료** (DriveLetterManager 분리 및 통합)
 - [x] **Phase 3 완료** (TrayIconManager 분리 및 통합)
-- [ ] **Phase 4 대기 중** (MountMonitoringService 분리)
+- [x] **Phase 4 완료** (MountMonitoringService 분리 및 통합)
+- [ ] **Phase 5 대기 중** (MountService 분리)
 
 ---
 
