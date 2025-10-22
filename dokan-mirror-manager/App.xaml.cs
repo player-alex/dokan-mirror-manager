@@ -1,5 +1,7 @@
 ﻿using System.Windows;
 using Caliburn.Micro;
+using DokanMirrorManager.Services;
+using DokanMirrorManager.Services.Interfaces;
 using DokanMirrorManager.ViewModels;
 using System.Collections.Generic;
 using System.Linq;
@@ -107,6 +109,10 @@ namespace DokanMirrorManager
         {
             _container.Singleton<IWindowManager, WindowManager>();
             _container.Singleton<IEventAggregator, EventAggregator>();
+
+            // Register services
+            _container.Singleton<IConfigurationService, ConfigurationService>();
+
             _container.PerRequest<ShellViewModel>();
         }
 

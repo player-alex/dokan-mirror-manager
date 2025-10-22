@@ -1,11 +1,11 @@
 using Caliburn.Micro;
 using DokanMirrorManager.Models;
+using DokanMirrorManager.Services.Interfaces;
 using DokanMirrorManager.Utils;
 using DokanNet;
 using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.IO;
-using System.Text.Json;
 using System.Windows;
 using Microsoft.Win32;
 using System.Linq;
@@ -20,6 +20,7 @@ namespace DokanMirrorManager.ViewModels;
 public class ShellViewModel : Screen
 {
     private readonly IWindowManager _windowManager;
+    private readonly IConfigurationService _configurationService;
     private readonly Dokan _dokan;
     private string _statusMessage = string.Empty;
     private MountItem? _selectedItem;
@@ -27,14 +28,12 @@ public class ShellViewModel : Screen
     private bool _isClosingToTray = false;
     private bool _isUpdatingDriveLetters = false;
     private bool _isHiding = false;
-    private const string ConfigFileName = "mounts.json";
     private const int WM_SHOWWINDOW_CUSTOM = 0x8001;
     private HwndSource? _hwndSource;
 
     // Critical Fix #1: Race Condition - Add locking mechanism for concurrent mount operations
     private readonly ConcurrentDictionary<MountItem, SemaphoreSlim> _mountLocks = new();
     private readonly Dispatcher _dispatcher;
-    private readonly SemaphoreSlim _configSaveLock = new(1, 1);
 
     // Major Fix #11: CancellationToken-based monitoring for external unmount detection
     private readonly ConcurrentDictionary<MountItem, CancellationTokenSource> _monitoringTokens = new();
@@ -99,9 +98,10 @@ public class ShellViewModel : Screen
         }
     }
 
-    public ShellViewModel(IWindowManager windowManager)
+    public ShellViewModel(IWindowManager windowManager, IConfigurationService configurationService)
     {
         _windowManager = windowManager;
+        _configurationService = configurationService;
         _dokan = new Dokan(null!); // Dokan library accepts null for default logger
         DisplayName = "Dokan Mirror Manager";
 
@@ -1258,89 +1258,66 @@ public class ShellViewModel : Screen
     {
         try
         {
-            var configPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, ConfigFileName);
+            var items = _configurationService.LoadConfigurationAsync().Result;
 
-            if (!File.Exists(configPath))
-                return;
-
-            var json = File.ReadAllText(configPath);
-            var items = JsonSerializer.Deserialize<List<MountItemDto>>(json);
-
-            if (items != null)
+            foreach (var mountItem in items)
             {
-                foreach (var dto in items)
-                {
-                    // Expand environment variables in SourcePath
-                    // e.g., %USERPROFILE%\Desktop -> C:\Users\Username\Desktop
-                    var expandedSourcePath = Environment.ExpandEnvironmentVariables(dto.SourcePath);
+                mountItem.PropertyChanged += MountItem_PropertyChanged;
+                MountItems.Add(mountItem);
 
-                    var mountItem = new MountItem
-                    {
-                        SourcePath = expandedSourcePath,
-                        OriginalSourcePath = dto.SourcePath, // Keep original path with env vars
-                        DestinationLetter = dto.DestinationLetter,
-                        AutoMount = dto.AutoMount,
-                        IsReadOnly = dto.IsReadOnly,
-                        Status = MountStatus.Unmounted
-                    };
-
-                    mountItem.PropertyChanged += MountItem_PropertyChanged;
-                    MountItems.Add(mountItem);
-
-                    // Critical Fix #1: Initialize semaphore for this mount item
-                    _mountLocks.TryAdd(mountItem, new SemaphoreSlim(1, 1));
-                }
-
-                UpdateAllAvailableDriveLetters();
-
-                // Auto-select drive letters for all loaded items
-                // Track used drive letters to handle duplicates in mounts.json
-                var usedDriveLetters = new HashSet<string>();
-
-                foreach (var item in MountItems)
-                {
-                    // If this item's drive letter is already used by a previous item in the load, clear it
-                    if (!string.IsNullOrEmpty(item.DestinationLetter) && usedDriveLetters.Contains(item.DestinationLetter))
-                    {
-                        item.DestinationLetter = string.Empty;
-                    }
-
-                    AutoSelectDriveLetter(item);
-
-                    // Track this item's selected drive letter
-                    if (!string.IsNullOrEmpty(item.DestinationLetter))
-                    {
-                        usedDriveLetters.Add(item.DestinationLetter);
-                    }
-
-                    // Update available drive letters after each assignment to prevent duplicates
-                    UpdateAllAvailableDriveLetters();
-                }
-
-                // Auto-mount items that have AutoMount enabled (sequentially to avoid conflicts)
-                Task.Run(async () =>
-                {
-                    foreach (var item in MountItems.Where(m => m.AutoMount && m.CanMount).ToList())
-                    {
-                        // Major Fix #8: Use captured dispatcher
-                        await _dispatcher.InvokeAsync(async () =>
-                        {
-                            await MountInternal(item, isAutoMount: true);
-                        });
-
-                        // Wait for mount to complete before starting next one
-                        var timeout = 0;
-                        while (item.Status == MountStatus.Mounting && timeout < 100)
-                        {
-                            await Task.Delay(100);
-                            timeout++;
-                        }
-
-                        // Small delay between mounts to ensure Dokan is ready
-                        await Task.Delay(500);
-                    }
-                });
+                // Critical Fix #1: Initialize semaphore for this mount item
+                _mountLocks.TryAdd(mountItem, new SemaphoreSlim(1, 1));
             }
+
+            UpdateAllAvailableDriveLetters();
+
+            // Auto-select drive letters for all loaded items
+            // Track used drive letters to handle duplicates in mounts.json
+            var usedDriveLetters = new HashSet<string>();
+
+            foreach (var item in MountItems)
+            {
+                // If this item's drive letter is already used by a previous item in the load, clear it
+                if (!string.IsNullOrEmpty(item.DestinationLetter) && usedDriveLetters.Contains(item.DestinationLetter))
+                {
+                    item.DestinationLetter = string.Empty;
+                }
+
+                AutoSelectDriveLetter(item);
+
+                // Track this item's selected drive letter
+                if (!string.IsNullOrEmpty(item.DestinationLetter))
+                {
+                    usedDriveLetters.Add(item.DestinationLetter);
+                }
+
+                // Update available drive letters after each assignment to prevent duplicates
+                UpdateAllAvailableDriveLetters();
+            }
+
+            // Auto-mount items that have AutoMount enabled (sequentially to avoid conflicts)
+            Task.Run(async () =>
+            {
+                foreach (var item in MountItems.Where(m => m.AutoMount && m.CanMount).ToList())
+                {
+                    // Major Fix #8: Use captured dispatcher
+                    await _dispatcher.InvokeAsync(async () =>
+                    {
+                        await MountInternal(item, isAutoMount: true);
+                    });
+
+                    // Wait for mount to complete before starting next one
+                    var timeout = 0;
+                    while (item.Status == MountStatus.Mounting && timeout < 100)
+                    {
+                        await Task.Delay(100);
+                        timeout++;
+                    }
+
+                    // Small delay between mounts to ensure Dokan is ready
+                    await Task.Delay(500);
+                }
+            });
         }
         catch (Exception ex)
         {
@@ -1350,29 +1327,13 @@ public class ShellViewModel : Screen
 
     private async Task SaveConfigurationAsync()
     {
-        await _configSaveLock.WaitAsync();
         try
         {
-            var configPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, ConfigFileName);
-            var items = MountItems.Select(m => new MountItemDto
-            {
-                // Save original path (with environment variables) if available
-                SourcePath = string.IsNullOrEmpty(m.OriginalSourcePath) ? m.SourcePath : m.OriginalSourcePath,
-                DestinationLetter = m.DestinationLetter,
-                AutoMount = m.AutoMount,
-                IsReadOnly = m.IsReadOnly
-            }).ToList();
-
-            var json = JsonSerializer.Serialize(items, new JsonSerializerOptions { WriteIndented = true });
-            File.WriteAllText(configPath, json);
+            await _configurationService.SaveConfigurationAsync(MountItems);
         }
         catch (Exception ex)
         {
             StatusMessage = $"Failed to save configuration: {ex.Message}";
-        }
-        finally
-        {
-            _configSaveLock.Release();
         }
     }
 
@@ -1408,13 +1369,5 @@ public class ShellViewModel : Screen
 
         _dokan?.Dispose();
         return true;
-    }
-
-    private class MountItemDto
-    {
-        public string SourcePath { get; set; } = string.Empty;
-        public string DestinationLetter { get; set; } = string.Empty;
-        public bool AutoMount { get; set; }
-        public bool IsReadOnly { get; set; }
     }
 }
