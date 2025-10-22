@@ -80,35 +80,39 @@
 
 ---
 
-## Phase 3: TrayIconManager 분리
+## Phase 3: TrayIconManager 분리 ✅ **완료**
 ### 3.1. 인터페이스 정의
-- [ ] 3.1.1. `ITrayIconManager.cs` 인터페이스 작성
-  - `void Initialize(Window window, Action showWindowAction, Func<Task> exitAction)`
+- [x] 3.1.1. `ITrayIconManager.cs` 인터페이스 작성
+  - `void Initialize(Window window, Action showWindowAction, Func<Task> exitAction, Action<string>? setStatusMessageAction)`
   - `void ShowWindow()`
   - `void HideWindow()`
   - `void ShowBalloonTip(string title, string message, BalloonIcon icon)`
   - `void Dispose()`
 
 ### 3.2. 구현 클래스 작성
-- [ ] 3.2.1. `TrayIconManager.cs` 클래스 작성
-- [ ] 3.2.2. ShellViewModel.cs에서 다음 코드 추출:
-  - `InitializeTaskbarIcon()` 메서드 (라인 144-190)
-  - `ShowWindow()` 메서드 (라인 205-214)
-  - `HideWindow()` 메서드 (라인 216-233)
-  - `ExitMenuItem_Click()` 메서드 (라인 235-277)
-  - `_taskbarIcon` 필드 및 관련 플래그들
+- [x] 3.2.1. `TrayIconManager.cs` 클래스 작성
+- [x] 3.2.2. ShellViewModel.cs에서 다음 코드 추출:
+  - `InitializeTaskbarIcon()` 메서드
+  - `ShowWindow()` 메서드
+  - `HideWindow()` 메서드
+  - `Window_Closing()` 메서드
+  - `ExitMenuItem_Click()` 메서드
+  - `_taskbarIcon`, `_isClosingToTray`, `_isHiding` 필드
 
 ### 3.3. ShellViewModel 통합
-- [ ] 3.3.1. ShellViewModel에 `ITrayIconManager` 의존성 주입
-- [ ] 3.3.2. OnViewLoaded에서 서비스 초기화 호출
-- [ ] 3.3.3. 빌드 및 동작 확인
-- [ ] 3.3.4. 커밋: `refactor: Extract TrayIconManager from ShellViewModel`
+- [x] 3.3.1. ShellViewModel에 `ITrayIconManager` 의존성 주입
+- [x] 3.3.2. OnViewLoaded에서 서비스 초기화 호출
+- [x] 3.3.3. ExitApplicationAsync 메서드로 exit 로직 통합
+- [x] 3.3.4. App.xaml.cs에 서비스 등록
+- [x] 3.3.5. 빌드 및 동작 확인
+- [ ] 3.3.6. 커밋: `refactor: Extract TrayIconManager from ShellViewModel` - 사용자가 커밋 관리
 
-**예상 코드량**:
-- TrayIconManager.cs: ~250줄
-- ShellViewModel.cs 감소: ~200줄
+**실제 코드량**:
+- ITrayIconManager.cs: 44줄
+- TrayIconManager.cs: 169줄
+- ShellViewModel.cs 감소: ~120줄
 
-**예상 컨텍스트 사용량**: 20%
+**실제 컨텍스트 사용량**: 58% (116k/200k)
 
 ---
 
@@ -248,7 +252,8 @@
 - [x] **Phase 0 완료** (디렉토리 구조 준비)
 - [x] **Phase 1 완료** (ConfigurationService 분리 및 통합)
 - [x] **Phase 2 완료** (DriveLetterManager 분리 및 통합)
-- [ ] **Phase 3 대기 중** (TrayIconManager 분리)
+- [x] **Phase 3 완료** (TrayIconManager 분리 및 통합)
+- [ ] **Phase 4 대기 중** (MountMonitoringService 분리)
 
 ---
 

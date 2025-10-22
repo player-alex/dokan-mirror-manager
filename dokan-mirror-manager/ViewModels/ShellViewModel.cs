@@ -3,17 +3,15 @@ using DokanMirrorManager.Models;
 using DokanMirrorManager.Services.Interfaces;
 using DokanMirrorManager.Utils;
 using DokanNet;
+using Hardcodet.Wpf.TaskbarNotification;
+using Microsoft.Win32;
+using System.Collections.Concurrent;
 using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.IO;
 using System.Windows;
-using Microsoft.Win32;
-using System.Linq;
-using Hardcodet.Wpf.TaskbarNotification;
 using System.Windows.Interop;
-using System.Runtime.InteropServices;
 using System.Windows.Threading;
-using System.Collections.Concurrent;
 
 namespace DokanMirrorManager.ViewModels;
 
@@ -22,12 +20,10 @@ public class ShellViewModel : Screen
     private readonly IWindowManager _windowManager;
     private readonly IConfigurationService _configurationService;
     private readonly IDriveLetterManager _driveLetterManager;
+    private readonly ITrayIconManager _trayIconManager;
     private readonly Dokan _dokan;
     private string _statusMessage = string.Empty;
     private MountItem? _selectedItem;
-    private TaskbarIcon? _taskbarIcon;
-    private bool _isClosingToTray = false;
-    private bool _isHiding = false;
     private const int WM_SHOWWINDOW_CUSTOM = 0x8001;
     private HwndSource? _hwndSource;
 
@@ -78,11 +74,12 @@ public class ShellViewModel : Screen
 
     public List<string> AvailableDriveLetters => _driveLetterManager.GetAvailableDriveLetters(MountItems, null);
 
-    public ShellViewModel(IWindowManager windowManager, IConfigurationService configurationService, IDriveLetterManager driveLetterManager)
+    public ShellViewModel(IWindowManager windowManager, IConfigurationService configurationService, IDriveLetterManager driveLetterManager, ITrayIconManager trayIconManager)
     {
         _windowManager = windowManager;
         _configurationService = configurationService;
         _driveLetterManager = driveLetterManager;
+        _trayIconManager = trayIconManager;
         _dokan = new Dokan(null!); // Dokan library accepts null for default logger
         DisplayName = "Dokan Mirror Manager";
 
@@ -95,7 +92,10 @@ public class ShellViewModel : Screen
         base.OnViewLoaded(view);
         StatusMessage = "Ready";
 
-        InitializeTaskbarIcon(view);
+        if (view is Window window)
+        {
+            _trayIconManager.Initialize(window, ShowWindow, ExitApplicationAsync, msg => StatusMessage = msg);
+        }
         SetupWindowMessageHook(view);
 
         // Load configuration and auto-mount asynchronously to avoid blocking UI thread
@@ -117,118 +117,19 @@ public class ShellViewModel : Screen
         if (msg == WM_SHOWWINDOW_CUSTOM)
         {
             // Another instance is trying to start - show this window
-            ShowWindow();
+            _trayIconManager.ShowWindow();
             handled = true;
         }
         return IntPtr.Zero;
     }
 
-    private void InitializeTaskbarIcon(object view)
-    {
-        if (view is Window window)
-        {
-            // Create tray icon with a default icon
-            _taskbarIcon = new TaskbarIcon
-            {
-                ToolTipText = "Dokan Mirror Manager",
-                NoLeftClickDelay = true
-            };
-
-            // Try to use window icon if available, otherwise use a default system icon
-            try
-            {
-                if (window.Icon != null)
-                {
-                    _taskbarIcon.IconSource = window.Icon;
-                }
-                else
-                {
-                    // Use default application icon
-                    _taskbarIcon.Icon = System.Drawing.SystemIcons.Application;
-                }
-            }
-            catch
-            {
-                _taskbarIcon.Icon = System.Drawing.SystemIcons.Application;
-            }
-
-            var contextMenu = new System.Windows.Controls.ContextMenu();
-
-            var openMenuItem = new System.Windows.Controls.MenuItem { Header = "Open" };
-            openMenuItem.Click += (s, e) => ShowWindow();
-            contextMenu.Items.Add(openMenuItem);
-
-            contextMenu.Items.Add(new System.Windows.Controls.Separator());
-
-            var exitMenuItem = new System.Windows.Controls.MenuItem { Header = "Exit" };
-            exitMenuItem.Click += ExitMenuItem_Click;
-            contextMenu.Items.Add(exitMenuItem);
-
-            _taskbarIcon.ContextMenu = contextMenu;
-            _taskbarIcon.TrayMouseDoubleClick += (s, e) => ShowWindow();
-
-            window.Closing += Window_Closing;
-        }
-    }
-
-    private void Window_Closing(object? sender, System.ComponentModel.CancelEventArgs e)
-    {
-        System.Diagnostics.Debug.WriteLine($"[Window_Closing] _isClosingToTray={_isClosingToTray}");
-        if (!_isClosingToTray)
-        {
-            e.Cancel = true;
-            if (!_isHiding)
-            {
-                HideWindow();
-            }
-        }
-    }
-
     private void ShowWindow()
     {
-        if (GetView() is Window window)
-        {
-            _isHiding = false;
-            window.Show();
-            window.WindowState = WindowState.Normal;
-            window.Activate();
-        }
+        _trayIconManager.ShowWindow();
     }
 
-    private void HideWindow()
+    private async Task ExitApplicationAsync()
     {
-        if (GetView() is Window window)
-        {
-            _isHiding = true;
-            window.Hide();
-            StatusMessage = "Minimized to tray";
-
-            // Show single balloon tip notification
-            System.Diagnostics.Debug.WriteLine("[HideWindow] Showing balloon tip");
-            _taskbarIcon?.ShowBalloonTip("Dokan Mirror Manager",
-                                        "Application minimized to tray",
-                                        BalloonIcon.Info);
-
-            // Reset flag after a short delay
-            Task.Delay(100).ContinueWith(_ => _isHiding = false);
-        }
-    }
-
-    private async void ExitMenuItem_Click(object sender, RoutedEventArgs e)
-    {
-        // Show window first to provide proper parent for MessageBox
-        if (GetView() is Window window)
-        {
-            window.Show();
-            window.WindowState = WindowState.Normal;
-            window.Activate();
-        }
-
-        // Small delay to ensure window is fully visible
-        await Task.Delay(100);
-
-        _isClosingToTray = true;
-
         var mountedItems = MountItems.Where(m => m.Status == MountStatus.Mounted).ToList();
 
         if (mountedItems.Any())
@@ -242,7 +143,6 @@ public class ShellViewModel : Screen
 
             if (result == MessageBoxResult.No)
             {
-                _isClosingToTray = false;
                 return;
             }
 
@@ -253,24 +153,9 @@ public class ShellViewModel : Screen
             }
         }
 
-        _taskbarIcon?.Dispose();
+        _trayIconManager?.Dispose();
         _dokan?.Dispose();
         Application.Current.Shutdown();
-    }
-
-    private async Task ExitApplication()
-    {
-        _isClosingToTray = true;
-
-        if (await CanCloseAsync())
-        {
-            _taskbarIcon?.Dispose();
-            Application.Current.Shutdown();
-        }
-        else
-        {
-            _isClosingToTray = false;
-        }
     }
 
     public void AddMount()
@@ -1229,37 +1114,10 @@ public class ShellViewModel : Screen
         }
     }
 
-    public override async Task<bool> CanCloseAsync(CancellationToken cancellationToken = default)
+    public override Task<bool> CanCloseAsync(CancellationToken cancellationToken = default)
     {
-        System.Diagnostics.Debug.WriteLine($"[CanCloseAsync] Called, _isClosingToTray={_isClosingToTray}");
-
-        // Don't show dialog if just minimizing to tray
-        if (!_isClosingToTray)
-        {
-            return true;
-        }
-
-        var mountedItems = MountItems.Where(m => m.Status == MountStatus.Mounted).ToList();
-
-        if (mountedItems.Any())
-        {
-            var result = MessageBox.Show(
-                $"There are {mountedItems.Count} mounted drive(s). Do you want to exit?",
-                "Confirm Exit",
-                MessageBoxButton.YesNo,
-                MessageBoxImage.Question);
-
-            if (result == MessageBoxResult.No)
-                return false;
-
-            // Unmount all drives before exiting
-            foreach (var item in mountedItems)
-            {
-                await Unmount(item);
-            }
-        }
-
-        _dokan?.Dispose();
-        return true;
+        // Window closing is handled by TrayIconManager
+        // This method is only called when the application is truly exiting
+        return Task.FromResult(true);
     }
 }
