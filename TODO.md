@@ -146,37 +146,42 @@
 
 ---
 
-## Phase 5: MountService 분리 (가장 복잡)
+## Phase 5: MountService 분리 (가장 복잡) ✅ **완료**
 ### 5.1. 인터페이스 정의
-- [ ] 5.1.1. `IMountService.cs` 인터페이스 작성
+- [x] 5.1.1. `IMountService.cs` 인터페이스 작성
   - `Task<MountResult> MountAsync(MountItem item, bool isAutoMount)`
   - `Task<UnmountResult> UnmountAsync(MountItem item)`
-- [ ] 5.1.2. `MountResult`, `UnmountResult` DTO 클래스 작성
+  - `void Initialize(Func<Window?> getWindow, Action<string> setStatusMessage, Func<Task> saveConfiguration)`
+  - `void InitializeMountLock(MountItem item)`
+  - `void RemoveMountLock(MountItem item)`
+- [x] 5.1.2. `MountResult`, `UnmountResult` DTO 클래스 작성
 
 ### 5.2. 구현 클래스 작성 (Part 1: Mount)
-- [ ] 5.2.1. `MountService.cs` 클래스 기본 구조 작성
-- [ ] 5.2.2. ShellViewModel.cs에서 Mount 관련 코드 추출:
-  - `MountInternal()` 메서드 (라인 383-759)
+- [x] 5.2.1. `MountService.cs` 클래스 기본 구조 작성
+- [x] 5.2.2. ShellViewModel.cs에서 Mount 관련 코드 추출:
+  - `MountInternal()` 메서드 (라인 238-617)
   - `_mountLocks` ConcurrentDictionary 및 관련 로직
   - 타임아웃 처리 로직
 
 ### 5.3. 구현 클래스 작성 (Part 2: Unmount)
-- [ ] 5.3.1. ShellViewModel.cs에서 Unmount 관련 코드 추출:
-  - `Unmount()` 메서드 (라인 862-1136)
+- [x] 5.3.1. ShellViewModel.cs에서 Unmount 관련 코드 추출:
+  - `Unmount()` 메서드 (라인 636-906)
   - 타임아웃 및 프로세스 감지 로직
 
 ### 5.4. ShellViewModel 통합
-- [ ] 5.4.1. ShellViewModel에 `IMountService` 의존성 주입
-- [ ] 5.4.2. Mount/Unmount 커맨드 메서드를 서비스 호출로 변경
-- [ ] 5.4.3. StatusMessage 업데이트 로직을 이벤트 기반으로 변경
-- [ ] 5.4.4. 빌드 및 동작 확인
-- [ ] 5.4.5. 커밋: `refactor: Extract MountService from ShellViewModel`
+- [x] 5.4.1. ShellViewModel에 `IMountService` 의존성 주입
+- [x] 5.4.2. Mount/Unmount 커맨드 메서드를 서비스 호출로 변경
+- [x] 5.4.3. MountService를 OnViewLoaded에서 Initialize로 초기화
+- [x] 5.4.4. App.xaml.cs에 서비스 등록
+- [x] 5.4.5. 빌드 및 동작 확인
+- [ ] 5.4.6. 커밋: `refactor: Extract MountService from ShellViewModel` - 사용자가 커밋 관리
 
-**예상 코드량**:
-- MountService.cs: ~500줄
-- ShellViewModel.cs 감소: ~650줄
+**실제 코드량**:
+- IMountService.cs: 60줄
+- MountService.cs: 611줄
+- ShellViewModel.cs 감소: ~673줄
 
-**예상 컨텍스트 사용량**: 25%
+**실제 컨텍스트 사용량**: 42% (82k/200k)
 
 ---
 
@@ -256,7 +261,8 @@
 - [x] **Phase 2 완료** (DriveLetterManager 분리 및 통합)
 - [x] **Phase 3 완료** (TrayIconManager 분리 및 통합)
 - [x] **Phase 4 완료** (MountMonitoringService 분리 및 통합)
-- [ ] **Phase 5 대기 중** (MountService 분리)
+- [x] **Phase 5 완료** (MountService 분리 및 통합)
+- [ ] **Phase 6 대기 중** (의존성 주입 설정 및 최종 정리)
 
 ---
 

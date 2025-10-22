@@ -115,6 +115,7 @@ namespace DokanMirrorManager
             _container.Singleton<IDriveLetterManager, DriveLetterManager>();
             _container.Singleton<ITrayIconManager, TrayIconManager>();
             _container.Singleton<IMountMonitoringService, MountMonitoringService>();
+            _container.Singleton<IMountService, MountService>();
 
             _container.PerRequest<ShellViewModel>();
         }
