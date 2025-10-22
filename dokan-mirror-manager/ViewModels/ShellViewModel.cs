@@ -13,6 +13,7 @@ using Hardcodet.Wpf.TaskbarNotification;
 using System.Windows.Interop;
 using System.Runtime.InteropServices;
 using System.Windows.Threading;
+using System.Collections.Concurrent;
 
 namespace DokanMirrorManager.ViewModels;
 
@@ -29,6 +30,14 @@ public class ShellViewModel : Screen
     private const string ConfigFileName = "mounts.json";
     private const int WM_SHOWWINDOW_CUSTOM = 0x8001;
     private HwndSource? _hwndSource;
+
+    // Critical Fix #1: Race Condition - Add locking mechanism for concurrent mount operations
+    private readonly ConcurrentDictionary<MountItem, SemaphoreSlim> _mountLocks = new();
+    private readonly Dispatcher _dispatcher;
+    private readonly SemaphoreSlim _configSaveLock = new(1, 1);
+
+    // Major Fix #11: CancellationToken-based monitoring for external unmount detection
+    private readonly ConcurrentDictionary<MountItem, CancellationTokenSource> _monitoringTokens = new();
 
     public ObservableCollection<MountItem> MountItems { get; } = [];
 
@@ -93,8 +102,11 @@ public class ShellViewModel : Screen
     public ShellViewModel(IWindowManager windowManager)
     {
         _windowManager = windowManager;
-        _dokan = new Dokan(null);
+        _dokan = new Dokan(null!); // Dokan library accepts null for default logger
         DisplayName = "Dokan Mirror Manager";
+
+        // Critical Fix #4: Capture dispatcher early to avoid null reference
+        _dispatcher = Dispatcher.CurrentDispatcher;
 
         LoadConfiguration();
     }
@@ -308,12 +320,15 @@ public class ShellViewModel : Screen
             mountItem.PropertyChanged += MountItem_PropertyChanged;
             MountItems.Add(mountItem);
 
+            // Critical Fix #1: Initialize semaphore for this mount item
+            _mountLocks.TryAdd(mountItem, new SemaphoreSlim(1, 1));
+
             UpdateAllAvailableDriveLetters();
 
             // Auto-select first available drive letter
             AutoSelectDriveLetter(mountItem);
 
-            SaveConfiguration();
+            SaveConfigurationAsync();
             StatusMessage = $"Added: {sourcePath}";
         }
     }
@@ -327,6 +342,19 @@ public class ShellViewModel : Screen
 
             SelectedItem.PropertyChanged -= MountItem_PropertyChanged;
             MountItems.Remove(SelectedItem);
+
+            // Critical Fix #1: Clean up semaphore when removing item
+            if (_mountLocks.TryRemove(itemToRemove, out var semaphore))
+            {
+                semaphore?.Dispose();
+            }
+
+            // Major Fix #11: Cancel and clean up monitoring task
+            if (_monitoringTokens.TryRemove(itemToRemove, out var cts))
+            {
+                cts.Cancel();
+                cts.Dispose();
+            }
 
             // Select next item if available
             if (MountItems.Count > 0)
@@ -342,116 +370,493 @@ public class ShellViewModel : Screen
             }
 
             UpdateAllAvailableDriveLetters();
-            SaveConfiguration();
+            SaveConfigurationAsync();
             StatusMessage = $"Removed: {itemToRemove.SourcePath}";
         }
     }
 
-    public void Mount(MountItem item)
+    public async Task Mount(MountItem item)
     {
-        if ((item.Status != MountStatus.Unmounted && item.Status != MountStatus.Error) || string.IsNullOrEmpty(item.DestinationLetter))
-            return;
+        await MountInternal(item, isAutoMount: false);
+    }
 
-        // Check if drive letter is already in use
-        if (DriveInfo.GetDrives().Any(d => d.Name.Equals(item.DestinationLetter, StringComparison.OrdinalIgnoreCase)))
-        {
-            MessageBox.Show($"Drive letter {item.DestinationLetter} is already in use.", "Mount Error", MessageBoxButton.OK, MessageBoxImage.Error);
-            return;
-        }
+    private async Task MountInternal(MountItem item, bool isAutoMount)
+    {
+        // Critical Fix #1: Race Condition - Prevent concurrent mount operations on same item
+        var semaphore = _mountLocks.GetOrAdd(item, _ => new SemaphoreSlim(1, 1));
 
-        // Check if another mount item is using this drive letter
-        if (MountItems.Any(m => m != item && m.Status == MountStatus.Mounted && m.DestinationLetter == item.DestinationLetter))
+        if (!await semaphore.WaitAsync(0)) // Non-blocking check
         {
-            MessageBox.Show($"Drive letter {item.DestinationLetter} is already mounted by another item.", "Mount Error", MessageBoxButton.OK, MessageBoxImage.Error);
+            // Another mount operation is already in progress for this item
             return;
         }
 
-        item.Status = MountStatus.Mounting;
-        StatusMessage = $"Mounting {item.SourcePath} to {item.DestinationLetter}...";
-
-        // Run mount operation in a completely separate thread
-        var thread = new System.Threading.Thread(() =>
+        try
         {
+            if ((item.Status != MountStatus.Unmounted && item.Status != MountStatus.Error) || string.IsNullOrEmpty(item.DestinationLetter))
+                return;
+
+            // Check if drive letter is already in use
+            if (DriveInfo.GetDrives().Any(d => d.Name.Equals(item.DestinationLetter, StringComparison.OrdinalIgnoreCase)))
+            {
+                var errorMsg = $"Drive letter {item.DestinationLetter} is already in use.";
+                if (!isAutoMount)
+                {
+                    MessageBox.Show(errorMsg, "Mount Error", MessageBoxButton.OK, MessageBoxImage.Error);
+                }
+                else
+                {
+                    StatusMessage = $"AutoMount failed: {errorMsg}";
+                    item.Status = MountStatus.Error;
+                    item.ErrorMessage = errorMsg;
+                }
+                return;
+            }
+
+            // Check if another mount item is using this drive letter
+            if (MountItems.Any(m => m != item && m.Status == MountStatus.Mounted && m.DestinationLetter == item.DestinationLetter))
+            {
+                var errorMsg = $"Drive letter {item.DestinationLetter} is already mounted by another item.";
+                if (!isAutoMount)
+                {
+                    MessageBox.Show(errorMsg, "Mount Error", MessageBoxButton.OK, MessageBoxImage.Error);
+                }
+                else
+                {
+                    StatusMessage = $"AutoMount failed: {errorMsg}";
+                    item.Status = MountStatus.Error;
+                    item.ErrorMessage = errorMsg;
+                }
+                return;
+            }
+
+            var driveLetter = item.DestinationLetter;
+            item.Status = MountStatus.Mounting;
+            StatusMessage = $"Mounting {item.SourcePath} to {driveLetter}...";
+
+            // Critical Fix #3 & #4: Replace DispatcherTimer with System.Threading.Timer to avoid memory leak and dispatcher affinity issues
+            var startTime = DateTime.Now;
+            System.Threading.Timer? updateTimer = null;
+            updateTimer = new System.Threading.Timer(_ =>
+            {
+                var elapsed = (DateTime.Now - startTime).TotalSeconds;
+                // Critical Fix #2: Update UI properties on dispatcher thread
+                _dispatcher.InvokeAsync(() =>
+                {
+                    StatusMessage = $"Mounting {driveLetter}... ({elapsed:F0}s)";
+                });
+            }, null, TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(1));
+
             try
             {
-                System.Diagnostics.Debug.WriteLine($"[Mount] Starting mount for {item.SourcePath} to {item.DestinationLetter}");
-
-                // Verify source path exists
-                if (!Directory.Exists(item.SourcePath))
+                // Create mount task - only performs the mount, doesn't wait for unmount
+                var mountTask = Task.Run(() =>
                 {
-                    throw new DirectoryNotFoundException($"Source path does not exist: {item.SourcePath}");
-                }
-
-                System.Diagnostics.Debug.WriteLine("[Mount] Creating Mirror instance");
-                var mirror = new Mirror(null, item.SourcePath);
-                item.Mirror = mirror;
-
-                System.Diagnostics.Debug.WriteLine("[Mount] Building DokanInstance");
-                var builder = new DokanInstanceBuilder(_dokan)
-                    .ConfigureOptions(options =>
+                    try
                     {
+                        System.Diagnostics.Debug.WriteLine($"[Mount] Starting mount for {item.SourcePath} to {driveLetter}");
+
+                        // Verify source path exists
+                        if (!Directory.Exists(item.SourcePath))
+                        {
+                            throw new DirectoryNotFoundException($"Source path does not exist: {item.SourcePath}");
+                        }
+
+                        System.Diagnostics.Debug.WriteLine("[Mount] Creating Mirror instance");
+                        var mirror = new Mirror(null, item.SourcePath);
+
+                        // Critical Fix #2: Update UI-bound properties on dispatcher thread
+                        _dispatcher.InvokeAsync(() => item.Mirror = mirror);
+
+                        System.Diagnostics.Debug.WriteLine("[Mount] Building DokanInstance");
+                        var builder = new DokanInstanceBuilder(_dokan)
+                            .ConfigureOptions(options =>
+                            {
+                                // Set base options
+                                var baseOptions = DokanOptions.EnableNotificationAPI;
 #if DEBUG
-                        options.Options = DokanOptions.DebugMode | DokanOptions.EnableNotificationAPI;
-#else
-                        options.Options = DokanOptions.EnableNotificationAPI;
+                                baseOptions |= DokanOptions.DebugMode;
 #endif
-                        options.MountPoint = item.DestinationLetter;
-                    });
+                                // Add WriteProtection if read-only
+                                if (item.IsReadOnly)
+                                {
+                                    baseOptions |= DokanOptions.WriteProtection;
+                                }
 
-                System.Diagnostics.Debug.WriteLine("[Mount] Calling Build()");
-                var instance = builder.Build(mirror);
-                item.DokanInstance = instance;
+                                options.Options = baseOptions;
+                                options.MountPoint = driveLetter;
+                            });
 
-                System.Diagnostics.Debug.WriteLine("[Mount] Build() completed successfully");
+                        System.Diagnostics.Debug.WriteLine("[Mount] Calling Build()");
+                        var instance = builder.Build(mirror);
 
-                // Update status immediately (before UI update) to avoid race conditions
-                item.Status = MountStatus.Mounted;
+                        // Critical Fix #2: Update UI-bound properties on dispatcher thread
+                        _dispatcher.InvokeAsync(() =>
+                        {
+                            item.DokanInstance = instance;
+                            // Update status immediately - mount is now complete
+                            item.Status = MountStatus.Mounted;
+                        });
 
-                // Update UI on success (non-blocking)
-                System.Windows.Application.Current.Dispatcher.BeginInvoke(() =>
-                {
-                    StatusMessage = $"Mounted {item.SourcePath} to {item.DestinationLetter}";
+                        System.Diagnostics.Debug.WriteLine("[Mount] Build() completed successfully");
+
+                        // Return the instance for background monitoring
+                        return instance;
+                    }
+                    catch (Exception ex)
+                    {
+                        System.Diagnostics.Debug.WriteLine($"[Mount] Exception: {ex.GetType().Name} - {ex.Message}");
+                        System.Diagnostics.Debug.WriteLine($"[Mount] StackTrace: {ex.StackTrace}");
+
+                        // Log to a file as well
+                        try
+                        {
+                            var logPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "mount_error.log");
+                            File.AppendAllText(logPath, $"[{DateTime.Now}] {ex.GetType().Name}: {ex.Message}\n{ex.StackTrace}\n\n");
+                        }
+                        catch { }
+
+                        // Re-throw to be handled by outer try-catch
+                        throw;
+                    }
                 });
 
-                System.Diagnostics.Debug.WriteLine("[Mount] Waiting for file system to close");
-                // Wait for file system to close (this blocks the thread)
-                var dokanInstance = instance as dynamic;
-                if (dokanInstance != null)
+                // Wait with timeout (10 seconds initial timeout)
+                var timeoutTask = Task.Delay(TimeSpan.FromSeconds(10));
+                var completedTask = await Task.WhenAny(mountTask, timeoutTask);
+
+                if (completedTask == mountTask)
                 {
-                    dokanInstance.WaitForFileSystemClosedAsync(uint.MaxValue).GetAwaiter().GetResult();
+                    // Mount completed successfully
+                    var instance = await mountTask; // Propagate any exceptions
+                    // Critical Fix #3: Dispose timer properly
+                    updateTimer?.Dispose();
+                    StatusMessage = $"Mounted {item.SourcePath} to {driveLetter}";
+                    SaveConfigurationAsync();
+
+                // Major Fix #11: Start background monitoring with CancellationToken support
+                _ = Task.Run(() => MonitorFileSystemClosure(instance, item, driveLetter));
+            }
+                else
+                {
+                    // Timeout occurred
+                    // Critical Fix #3: Dispose timer properly
+                    updateTimer?.Dispose();
+                    var elapsed = (DateTime.Now - startTime).TotalSeconds;
+
+                // For AutoMount, automatically continue in background without user interaction
+                MessageBoxResult result;
+                if (isAutoMount)
+                {
+                    result = MessageBoxResult.No; // Automatically continue in background
+                    StatusMessage = $"AutoMount: {driveLetter} taking longer than expected, continuing in background...";
+                }
+                else
+                {
+                    // Ask user for manual mounts
+                    result = MessageBox.Show(
+                        GetView() as Window,
+                        $"Mounting {driveLetter} is taking longer than expected ({elapsed:F0} seconds).\n\n" +
+                        "This usually happens when:\n" +
+                        "  • The source path is on a slow network drive\n" +
+                        "  • The system is under heavy load\n" +
+                        "  • Dokan driver is initializing\n\n" +
+                        "Do you want to continue waiting?",
+                        "Mount Timeout",
+                        MessageBoxButton.YesNoCancel,
+                        MessageBoxImage.Warning);
                 }
 
-                System.Diagnostics.Debug.WriteLine("[Mount] File system closed");
+                    if (result == MessageBoxResult.Yes)
+                    {
+                        // Continue waiting (extend timeout to 30 more seconds)
+                        StatusMessage = $"Still mounting {driveLetter}...";
+                        // Critical Fix #3 & #4: Create new timer for extended timeout
+                        updateTimer = new System.Threading.Timer(_ =>
+                        {
+                            var elapsed = (DateTime.Now - startTime).TotalSeconds;
+                            _dispatcher.InvokeAsync(() =>
+                            {
+                                StatusMessage = $"Mounting {driveLetter}... ({elapsed:F0}s)";
+                            });
+                        }, null, TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(1));
+
+                        var extendedTimeoutTask = Task.Delay(TimeSpan.FromSeconds(30));
+                        var extendedCompletedTask = await Task.WhenAny(mountTask, extendedTimeoutTask);
+
+                        // Critical Fix #3: Dispose timer properly
+                        updateTimer?.Dispose();
+
+                    if (extendedCompletedTask == mountTask)
+                    {
+                        var instance = await mountTask;
+                        StatusMessage = $"Mounted {item.SourcePath} to {driveLetter}";
+                        SaveConfigurationAsync();
+
+                        // Major Fix #11: Start background monitoring
+                        _ = Task.Run(() => MonitorFileSystemClosure(instance, item, driveLetter));
+                    }
+                    else
+                    {
+                        // Still timed out after extended wait
+                        StatusMessage = $"Mount of {driveLetter} is still in progress...";
+                        // Major Fix #9: Don't show MessageBox for AutoMount
+                        if (!isAutoMount)
+                        {
+                            MessageBox.Show(
+                                GetView() as Window,
+                                $"Mount is still in progress after {(DateTime.Now - startTime).TotalSeconds:F0} seconds.\n\n" +
+                                "The mount will continue in the background.\n" +
+                                "Please wait for completion.",
+                                "Mount Taking Long Time",
+                                MessageBoxButton.OK,
+                                MessageBoxImage.Information);
+                        }
+
+                        // Continue waiting in background
+                        _ = Task.Run(async () =>
+                        {
+                            try
+                            {
+                                var instance = await mountTask;
+                                // Major Fix #8: Use captured dispatcher
+                                await _dispatcher.InvokeAsync(() =>
+                                {
+                                    StatusMessage = $"Mounted {item.SourcePath} to {driveLetter} (completed in background)";
+                                    SaveConfigurationAsync();
+                                });
+
+                                // Major Fix #11: Start background monitoring
+                                await MonitorFileSystemClosure(instance, item, driveLetter);
+                            }
+                            catch (Exception ex)
+                            {
+                                // Major Fix #8: Use captured dispatcher
+                                await _dispatcher.InvokeAsync(() =>
+                                {
+                                    item.Status = MountStatus.Error;
+                                    item.ErrorMessage = ex.Message;
+                                    StatusMessage = $"Background mount failed: {ex.Message}";
+                                    // Major Fix #9: Don't show MessageBox for AutoMount
+                                    if (!isAutoMount)
+                                    {
+                                        MessageBox.Show($"Failed to mount {item.SourcePath}:\n\n{ex.GetType().Name}: {ex.Message}\n\nSee mount_error.log for details",
+                                            "Mount Error", MessageBoxButton.OK, MessageBoxImage.Error);
+                                    }
+                                });
+                            }
+                        });
+                    }
+                }
+                else if (result == MessageBoxResult.No)
+                {
+                    // User chose to cancel - but we can't really cancel the mount once started
+                    StatusMessage = $"Mount of {driveLetter} will continue in background...";
+                    MessageBox.Show(
+                        GetView() as Window,
+                        "Note: The mount operation cannot be cancelled once started.\n" +
+                        "It will continue in the background.\n\n" +
+                        "The drive will be mounted when the operation completes.",
+                        "Mount Continuing",
+                        MessageBoxButton.OK,
+                        MessageBoxImage.Information);
+
+                    // Continue in background
+                    _ = Task.Run(async () =>
+                    {
+                        try
+                        {
+                            var instance = await mountTask;
+                            // Major Fix #8: Use captured dispatcher
+                            await _dispatcher.InvokeAsync(() =>
+                            {
+                                StatusMessage = $"Mounted {item.SourcePath} to {driveLetter} (completed in background)";
+                                SaveConfigurationAsync();
+                            });
+
+                            // Major Fix #11: Start background monitoring
+                            await MonitorFileSystemClosure(instance, item, driveLetter);
+                        }
+                        catch (Exception ex)
+                        {
+                            // Major Fix #8: Use captured dispatcher
+                            await _dispatcher.InvokeAsync(() =>
+                            {
+                                item.Status = MountStatus.Error;
+                                item.ErrorMessage = ex.Message;
+                                StatusMessage = $"Background mount failed: {ex.Message}";
+                                MessageBox.Show($"Failed to mount {item.SourcePath}:\n\n{ex.GetType().Name}: {ex.Message}\n\nSee mount_error.log for details",
+                                    "Mount Error", MessageBoxButton.OK, MessageBoxImage.Error);
+                            });
+                        }
+                    });
+                }
+                else // Cancel
+                {
+                    // Same as No - continue in background
+                    StatusMessage = $"Mount of {driveLetter} continuing in background...";
+
+                    _ = Task.Run(async () =>
+                    {
+                        try
+                        {
+                            var instance = await mountTask;
+                            // Major Fix #8: Use captured dispatcher
+                            await _dispatcher.InvokeAsync(() =>
+                            {
+                                StatusMessage = $"Mounted {item.SourcePath} to {driveLetter}";
+                                SaveConfigurationAsync();
+                            });
+
+                            // Major Fix #11: Start background monitoring
+                            await MonitorFileSystemClosure(instance, item, driveLetter);
+                        }
+                        catch (Exception ex)
+                        {
+                            // Major Fix #8: Use captured dispatcher
+                            await _dispatcher.InvokeAsync(() =>
+                            {
+                                item.Status = MountStatus.Error;
+                                item.ErrorMessage = ex.Message;
+                                StatusMessage = $"Background mount failed: {ex.Message}";
+                                MessageBox.Show($"Failed to mount {item.SourcePath}:\n\n{ex.GetType().Name}: {ex.Message}\n\nSee mount_error.log for details",
+                                    "Mount Error", MessageBoxButton.OK, MessageBoxImage.Error);
+                            });
+                        }
+                    });
+                }
+            }
             }
             catch (Exception ex)
             {
-                System.Diagnostics.Debug.WriteLine($"[Mount] Exception: {ex.GetType().Name} - {ex.Message}");
-                System.Diagnostics.Debug.WriteLine($"[Mount] StackTrace: {ex.StackTrace}");
+                // Critical Fix #3: Dispose timer properly in catch block
+                updateTimer?.Dispose();
+                item.Status = MountStatus.Error;
+                item.ErrorMessage = ex.Message;
+                StatusMessage = $"Failed to mount: {ex.Message}";
 
-                // Log to a file as well
-                try
+                if (!isAutoMount)
                 {
-                    var logPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "mount_error.log");
-                    File.AppendAllText(logPath, $"[{DateTime.Now}] {ex.GetType().Name}: {ex.Message}\n{ex.StackTrace}\n\n");
+                    MessageBox.Show(
+                        GetView() as Window,
+                        $"Failed to mount {item.SourcePath}:\n\n{ex.Message}",
+                        "Mount Error",
+                        MessageBoxButton.OK,
+                        MessageBoxImage.Error);
                 }
-                catch { }
-
-                // Update UI on error
-                System.Windows.Application.Current.Dispatcher.BeginInvoke(() =>
-                {
-                    item.Status = MountStatus.Error;
-                    item.ErrorMessage = ex.Message;
-                    StatusMessage = $"Failed to mount: {ex.Message}";
-                    MessageBox.Show($"Failed to mount {item.SourcePath}:\n\n{ex.GetType().Name}: {ex.Message}\n\nSee mount_error.log for details",
-                        "Mount Error", MessageBoxButton.OK, MessageBoxImage.Error);
-                });
             }
-        });
+            finally
+            {
+                // Critical Fix #3: Ensure timer is disposed in all code paths
+                updateTimer?.Dispose();
+            }
+        }
+        finally
+        {
+            // Critical Fix #1: Always release the semaphore
+            semaphore.Release();
+        }
+    }
 
-        thread.IsBackground = true;
-        thread.SetApartmentState(System.Threading.ApartmentState.STA);
-        thread.Name = $"DokanMount-{item.DestinationLetter}";
-        thread.Start();
+    // Major Fix #11: Robust monitoring with fallback to polling
+    private async Task MonitorFileSystemClosure(DokanInstance instance, MountItem item, string driveLetter)
+    {
+        // Cancel any previous monitoring for this item
+        if (_monitoringTokens.TryRemove(item, out var oldCts))
+        {
+            oldCts.Cancel();
+            oldCts.Dispose();
+        }
+
+        var cts = new CancellationTokenSource();
+        _monitoringTokens.TryAdd(item, cts);
+
+        try
+        {
+            System.Diagnostics.Debug.WriteLine($"[Monitor] Starting monitoring for {driveLetter}");
+
+            // Try to use DokanInstance's WaitForFileSystemClosedAsync
+            bool usePolling = false;
+            try
+            {
+                var waitTask = instance.WaitForFileSystemClosedAsync(uint.MaxValue);
+                var completedTask = await Task.WhenAny(waitTask, Task.Delay(-1, cts.Token));
+
+                if (completedTask == waitTask)
+                {
+                    await waitTask; // Propagate exceptions
+                    System.Diagnostics.Debug.WriteLine($"[Monitor] File system closed normally for {driveLetter}");
+                }
+                else
+                {
+                    // Cancellation requested
+                    System.Diagnostics.Debug.WriteLine($"[Monitor] Monitoring cancelled for {driveLetter}");
+                    return;
+                }
+            }
+            catch (OperationCanceledException)
+            {
+                // Monitoring was cancelled (unmount requested or item removed)
+                System.Diagnostics.Debug.WriteLine($"[Monitor] Monitoring cancelled for {driveLetter}");
+                return;
+            }
+            catch (Exception ex)
+            {
+                // WaitForFileSystemClosedAsync failed - switch to polling
+                System.Diagnostics.Debug.WriteLine($"[Monitor] WaitForFileSystemClosedAsync failed: {ex.Message}, switching to polling");
+                usePolling = true;
+            }
+
+            // If WaitForFileSystemClosedAsync failed or returned, use polling as fallback
+            if (usePolling)
+            {
+                System.Diagnostics.Debug.WriteLine($"[Monitor] Starting polling monitor for {driveLetter}");
+
+                while (!cts.Token.IsCancellationRequested)
+                {
+                    try
+                    {
+                        await Task.Delay(2000, cts.Token);
+
+                        var driveExists = DriveInfo.GetDrives()
+                            .Any(d => d.Name.Equals(driveLetter, StringComparison.OrdinalIgnoreCase));
+
+                        if (!driveExists)
+                        {
+                            System.Diagnostics.Debug.WriteLine($"[Monitor] Drive {driveLetter} no longer exists (polling detected)");
+                            break;
+                        }
+                    }
+                    catch (OperationCanceledException)
+                    {
+                        return;
+                    }
+                    catch (Exception ex)
+                    {
+                        System.Diagnostics.Debug.WriteLine($"[PollingMonitor] Error: {ex.Message}");
+                        // Continue polling despite errors
+                    }
+                }
+            }
+
+            // Drive was unmounted - update UI
+            await _dispatcher.InvokeAsync(() =>
+            {
+                if (item.Status == MountStatus.Mounted)
+                {
+                    item.Status = MountStatus.Unmounted;
+                    item.DokanInstance = null;
+                    item.Mirror = null;
+                    StatusMessage = $"{driveLetter} was unmounted externally";
+                    SaveConfigurationAsync();
+                }
+            });
+        }
+        finally
+        {
+            _monitoringTokens.TryRemove(item, out _);
+            cts.Dispose();
+        }
     }
 
     public async Task Unmount(MountItem item)
@@ -459,21 +864,28 @@ public class ShellViewModel : Screen
         if (item.Status != MountStatus.Mounted)
             return;
 
+        // Major Fix #11: Cancel monitoring task
+        if (_monitoringTokens.TryRemove(item, out var cts))
+        {
+            cts.Cancel();
+            cts.Dispose();
+        }
+
         var driveLetter = item.DestinationLetter;
         StatusMessage = $"Unmounting {driveLetter}...";
 
-        // Setup progress indicator with elapsed time
+        // Critical Fix #3 & #4: Replace DispatcherTimer with System.Threading.Timer
         var startTime = DateTime.Now;
-        var updateTimer = new DispatcherTimer
-        {
-            Interval = TimeSpan.FromSeconds(1)
-        };
-        updateTimer.Tick += (s, e) =>
+        System.Threading.Timer? updateTimer = null;
+        updateTimer = new System.Threading.Timer(_ =>
         {
             var elapsed = (DateTime.Now - startTime).TotalSeconds;
-            StatusMessage = $"Unmounting {driveLetter}... ({elapsed:F0}s)";
-        };
-        updateTimer.Start();
+            // Critical Fix #2: Update UI properties on dispatcher thread
+            _dispatcher.InvokeAsync(() =>
+            {
+                StatusMessage = $"Unmounting {driveLetter}... ({elapsed:F0}s)";
+            });
+        }, null, TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(1));
 
         try
         {
@@ -489,8 +901,7 @@ public class ShellViewModel : Screen
                 {
                     disposable.Dispose();
                 }
-                item.DokanInstance = null;
-                item.Mirror = null;
+                // Major Fix #7: Don't set null here - will be set after task completion
             });
 
             // Wait with timeout (10 seconds initial timeout)
@@ -501,16 +912,21 @@ public class ShellViewModel : Screen
             {
                 // Unmount completed successfully
                 await unmountTask; // Propagate any exceptions
-                updateTimer.Stop();
+                // Critical Fix #3: Dispose timer properly
+                updateTimer?.Dispose();
+                // Major Fix #7: Set null on UI thread after unmount completes
+                item.DokanInstance = null;
+                item.Mirror = null;
                 item.Status = MountStatus.Unmounted;
                 item.ErrorMessage = string.Empty;
                 StatusMessage = $"Unmounted {driveLetter}";
-                SaveConfiguration();
+                SaveConfigurationAsync();
             }
             else
             {
                 // Timeout occurred - ask user
-                updateTimer.Stop();
+                // Critical Fix #3: Dispose timer properly
+                updateTimer?.Dispose();
                 var elapsed = (DateTime.Now - startTime).TotalSeconds;
 
                 // Check for processes using the drive (only when timeout occurs)
@@ -552,20 +968,32 @@ public class ShellViewModel : Screen
                 {
                     // Continue waiting (extend timeout to 30 more seconds)
                     StatusMessage = $"Still unmounting {driveLetter}...";
-                    updateTimer.Start();
+                    // Critical Fix #3 & #4: Create new timer for extended timeout
+                    updateTimer = new System.Threading.Timer(_ =>
+                    {
+                        var elapsed = (DateTime.Now - startTime).TotalSeconds;
+                        _dispatcher.InvokeAsync(() =>
+                        {
+                            StatusMessage = $"Unmounting {driveLetter}... ({elapsed:F0}s)";
+                        });
+                    }, null, TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(1));
 
                     var extendedTimeoutTask = Task.Delay(TimeSpan.FromSeconds(30));
                     var extendedCompletedTask = await Task.WhenAny(unmountTask, extendedTimeoutTask);
 
-                    updateTimer.Stop();
+                    // Critical Fix #3: Dispose timer properly
+                    updateTimer?.Dispose();
 
                     if (extendedCompletedTask == unmountTask)
                     {
                         await unmountTask;
+                        // Major Fix #7: Set null on UI thread after unmount completes
+                        item.DokanInstance = null;
+                        item.Mirror = null;
                         item.Status = MountStatus.Unmounted;
                         item.ErrorMessage = string.Empty;
                         StatusMessage = $"Unmounted {driveLetter}";
-                        SaveConfiguration();
+                        SaveConfigurationAsync();
                     }
                     else
                     {
@@ -586,17 +1014,22 @@ public class ShellViewModel : Screen
                             try
                             {
                                 await unmountTask;
-                                await Application.Current.Dispatcher.InvokeAsync(() =>
+                                // Major Fix #8: Use captured dispatcher
+                                await _dispatcher.InvokeAsync(() =>
                                 {
+                                    // Major Fix #7: Set null on UI thread after unmount completes
+                                    item.DokanInstance = null;
+                                    item.Mirror = null;
                                     item.Status = MountStatus.Unmounted;
                                     item.ErrorMessage = string.Empty;
                                     StatusMessage = $"Unmounted {driveLetter} (completed in background)";
-                                    SaveConfiguration();
+                                    SaveConfigurationAsync();
                                 });
                             }
                             catch (Exception ex)
                             {
-                                await Application.Current.Dispatcher.InvokeAsync(() =>
+                                // Major Fix #8: Use captured dispatcher
+                                await _dispatcher.InvokeAsync(() =>
                                 {
                                     StatusMessage = $"Background unmount failed: {ex.Message}";
                                     item.ErrorMessage = ex.Message;
@@ -624,17 +1057,22 @@ public class ShellViewModel : Screen
                         try
                         {
                             await unmountTask;
-                            await Application.Current.Dispatcher.InvokeAsync(() =>
+                            // Major Fix #8: Use captured dispatcher
+                            await _dispatcher.InvokeAsync(() =>
                             {
+                                // Major Fix #7: Set null on UI thread after unmount completes
+                                item.DokanInstance = null;
+                                item.Mirror = null;
                                 item.Status = MountStatus.Unmounted;
                                 item.ErrorMessage = string.Empty;
                                 StatusMessage = $"Unmounted {driveLetter} (completed in background)";
-                                SaveConfiguration();
+                                SaveConfigurationAsync();
                             });
                         }
                         catch (Exception ex)
                         {
-                            await Application.Current.Dispatcher.InvokeAsync(() =>
+                            // Major Fix #8: Use captured dispatcher
+                            await _dispatcher.InvokeAsync(() =>
                             {
                                 StatusMessage = $"Background unmount failed: {ex.Message}";
                                 item.ErrorMessage = ex.Message;
@@ -652,17 +1090,22 @@ public class ShellViewModel : Screen
                         try
                         {
                             await unmountTask;
-                            await Application.Current.Dispatcher.InvokeAsync(() =>
+                            // Major Fix #8: Use captured dispatcher
+                            await _dispatcher.InvokeAsync(() =>
                             {
+                                // Major Fix #7: Set null on UI thread after unmount completes
+                                item.DokanInstance = null;
+                                item.Mirror = null;
                                 item.Status = MountStatus.Unmounted;
                                 item.ErrorMessage = string.Empty;
                                 StatusMessage = $"Unmounted {driveLetter}";
-                                SaveConfiguration();
+                                SaveConfigurationAsync();
                             });
                         }
                         catch (Exception ex)
                         {
-                            await Application.Current.Dispatcher.InvokeAsync(() =>
+                            // Major Fix #8: Use captured dispatcher
+                            await _dispatcher.InvokeAsync(() =>
                             {
                                 StatusMessage = $"Background unmount failed: {ex.Message}";
                                 item.ErrorMessage = ex.Message;
@@ -674,7 +1117,8 @@ public class ShellViewModel : Screen
         }
         catch (Exception ex)
         {
-            updateTimer.Stop();
+            // Critical Fix #3: Dispose timer properly in catch block
+            updateTimer?.Dispose();
             StatusMessage = $"Failed to unmount: {ex.Message}";
             item.ErrorMessage = ex.Message;
             MessageBox.Show(
@@ -683,6 +1127,11 @@ public class ShellViewModel : Screen
                 "Unmount Error",
                 MessageBoxButton.OK,
                 MessageBoxImage.Error);
+        }
+        finally
+        {
+            // Critical Fix #3: Ensure timer is disposed in all code paths
+            updateTimer?.Dispose();
         }
     }
 
@@ -730,7 +1179,7 @@ public class ShellViewModel : Screen
             e.PropertyName == nameof(MountItem.IsReadOnly) ||
             e.PropertyName == nameof(MountItem.DestinationLetter))
         {
-            SaveConfiguration();
+            SaveConfigurationAsync();
         }
     }
 
@@ -837,6 +1286,9 @@ public class ShellViewModel : Screen
 
                     mountItem.PropertyChanged += MountItem_PropertyChanged;
                     MountItems.Add(mountItem);
+
+                    // Critical Fix #1: Initialize semaphore for this mount item
+                    _mountLocks.TryAdd(mountItem, new SemaphoreSlim(1, 1));
                 }
 
                 UpdateAllAvailableDriveLetters();
@@ -870,9 +1322,10 @@ public class ShellViewModel : Screen
                 {
                     foreach (var item in MountItems.Where(m => m.AutoMount && m.CanMount).ToList())
                     {
-                        await System.Windows.Application.Current.Dispatcher.InvokeAsync(() =>
+                        // Major Fix #8: Use captured dispatcher
+                        await _dispatcher.InvokeAsync(async () =>
                         {
-                            Mount(item);
+                            await MountInternal(item, isAutoMount: true);
                         });
 
                         // Wait for mount to complete before starting next one
@@ -895,8 +1348,9 @@ public class ShellViewModel : Screen
         }
     }
 
-    private void SaveConfiguration()
+    private async Task SaveConfigurationAsync()
     {
+        await _configSaveLock.WaitAsync();
         try
         {
             var configPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, ConfigFileName);
@@ -915,6 +1369,10 @@ public class ShellViewModel : Screen
         catch (Exception ex)
         {
             StatusMessage = $"Failed to save configuration: {ex.Message}";
+        }
+        finally
+        {
+            _configSaveLock.Release();
         }
     }
 
