@@ -1,11 +1,8 @@
 using Caliburn.Micro;
 using DokanMirrorManager.Models;
 using DokanMirrorManager.Services.Interfaces;
-using DokanMirrorManager.Utils;
 using DokanNet;
-using Hardcodet.Wpf.TaskbarNotification;
 using Microsoft.Win32;
-using System.Collections.Concurrent;
 using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.IO;
@@ -29,8 +26,14 @@ public class ShellViewModel : Screen
     private const int WM_SHOWWINDOW_CUSTOM = 0x8001;
     private HwndSource? _hwndSource;
     private readonly Dispatcher _dispatcher;
+    private bool _isExiting = false;
+    private bool _isAutoMounting = false;
 
     public ObservableCollection<MountItem> MountItems { get; } = [];
+
+    public bool CanInteractWithList => !_isExiting;
+
+    public bool CanAddMount => !_isExiting && !_isAutoMounting;
 
     public string StatusMessage
     {
@@ -134,32 +137,46 @@ public class ShellViewModel : Screen
 
     private async Task ExitApplicationAsync()
     {
-        var mountedItems = MountItems.Where(m => m.Status == MountStatus.Mounted).ToList();
+        _isExiting = true;
+        NotifyOfPropertyChange(() => CanInteractWithList);
+        NotifyOfPropertyChange(() => CanAddMount);
 
-        if (mountedItems.Any())
+        try
         {
-            var result = MessageBox.Show(
-                GetView() as Window,
-                $"There are {mountedItems.Count} mounted drive(s). Do you want to exit?",
-                "Confirm Exit",
-                MessageBoxButton.YesNo,
-                MessageBoxImage.Question);
+            var mountedItems = MountItems.Where(m => m.Status == MountStatus.Mounted).ToList();
 
-            if (result == MessageBoxResult.No)
+            if (mountedItems.Any())
             {
-                return;
+                var result = MessageBox.Show(
+                    GetView() as Window,
+                    $"There are {mountedItems.Count} mounted drive(s). Do you want to exit?",
+                    "Confirm Exit",
+                    MessageBoxButton.YesNo,
+                    MessageBoxImage.Question);
+
+                if (result == MessageBoxResult.No)
+                {
+                    return;
+                }
+
+                // Unmount all drives before exiting
+                foreach (var item in mountedItems)
+                {
+                    await Unmount(item);
+                }
             }
 
-            // Unmount all drives before exiting
-            foreach (var item in mountedItems)
-            {
-                await Unmount(item);
-            }
+            _trayIconManager?.Dispose();
+            _dokan?.Dispose();
+            Application.Current.Shutdown();
         }
-
-        _trayIconManager?.Dispose();
-        _dokan?.Dispose();
-        Application.Current.Shutdown();
+        finally
+        {
+            // If exit is cancelled, re-enable UI
+            _isExiting = false;
+            NotifyOfPropertyChange(() => CanInteractWithList);
+            NotifyOfPropertyChange(() => CanAddMount);
+        }
     }
 
     public void AddMount()
@@ -322,24 +339,41 @@ public class ShellViewModel : Screen
             // Auto-mount items that have AutoMount enabled (sequentially to avoid conflicts)
             Task.Run(async () =>
             {
-                foreach (var item in MountItems.Where(m => m.AutoMount && m.CanMount).ToList())
+                try
                 {
-                    // Use captured dispatcher
-                    await _dispatcher.InvokeAsync(async () =>
+                    _isAutoMounting = true;
+                    await _dispatcher.InvokeAsync(() =>
                     {
-                        await _mountService.MountAsync(item, isAutoMount: true);
+                        NotifyOfPropertyChange(() => CanAddMount);
                     });
 
-                    // Wait for mount to complete before starting next one
-                    var timeout = 0;
-                    while (item.Status == MountStatus.Mounting && timeout < 100)
+                    foreach (var item in MountItems.Where(m => m.AutoMount && m.CanMount).ToList())
                     {
-                        await Task.Delay(100);
-                        timeout++;
-                    }
+                        // Use captured dispatcher
+                        await _dispatcher.InvokeAsync(async () =>
+                        {
+                            await _mountService.MountAsync(item, isAutoMount: true);
+                        });
 
-                    // Small delay between mounts to ensure Dokan is ready
-                    await Task.Delay(500);
+                        // Wait for mount to complete before starting next one
+                        var timeout = 0;
+                        while (item.Status == MountStatus.Mounting && timeout < 100)
+                        {
+                            await Task.Delay(100);
+                            timeout++;
+                        }
+
+                        // Small delay between mounts to ensure Dokan is ready
+                        await Task.Delay(500);
+                    }
+                }
+                finally
+                {
+                    _isAutoMounting = false;
+                    await _dispatcher.InvokeAsync(() =>
+                    {
+                        NotifyOfPropertyChange(() => CanAddMount);
+                    });
                 }
             });
         }

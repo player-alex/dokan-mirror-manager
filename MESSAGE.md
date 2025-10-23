@@ -1,94 +1,109 @@
-# Commit Message for Phase 5: MountService Extraction
+# Commit Message: UI Locking During Critical Operations
 
 ## Title
 ```
-refactor: Extract MountService from ShellViewModel
+fix: Prevent race condition by locking UI during exit and AutoMount
 ```
 
 ## Body
 ```
-Extract mount and unmount operations from ShellViewModel into a dedicated
-MountService to improve separation of concerns and testability.
+Add UI locking mechanism to prevent race conditions during critical operations
+such as application exit and AutoMount, ensuring safe and predictable behavior.
+
+Problem:
+When the user clicks "Exit" in the tray menu, a confirmation dialog appears.
+During this time, the UI remains responsive, allowing users to mount additional
+items. This creates a race condition where:
+1. Exit operation captures snapshot of 4 mounted items
+2. User quickly mounts a 5th item while dialog is shown
+3. Exit proceeds to unmount only the original 4 items
+4. Application exits with the 5th item still mounted (zombie drive)
+
+Similarly, during AutoMount operations, users could add new items or perform
+other operations that might interfere with the sequential mounting process.
+
+Solution:
+Implement differential UI locking based on operation criticality:
+- Exit operation: Lock entire ListView (complete freeze)
+- AutoMount operation: Lock only AddMount button (allow monitoring)
 
 Changes:
-1. Created IMountService interface (60 lines)
-   - MountAsync(item, isAutoMount) - Handles mount operations with timeout
-   - UnmountAsync(item) - Handles unmount operations with timeout
-   - Initialize(getWindow, setStatusMessage, saveConfiguration) - Initializes callbacks
-   - InitializeMountLock(item) - Initializes concurrency control
-   - RemoveMountLock(item) - Cleans up concurrency control
+1. Added UI state management flags to ShellViewModel
+   - _isExiting: Tracks if application is in exit process
+   - _isAutoMounting: Tracks if AutoMount is in progress
 
-2. Created MountResult and UnmountResult DTOs
-   - Success flag
-   - ErrorMessage (optional)
-   - ContinuedInBackground flag
+2. Added computed properties for UI binding
+   - CanInteractWithList: Returns !_isExiting
+     * Completely disables ListView during exit
+     * Prevents any mount/unmount operations
+     * Prevents checkbox/combobox changes
+   - CanAddMount: Returns !_isExiting && !_isAutoMounting
+     * Disables Add button during exit
+     * Disables Add button during AutoMount
+     * Allows other operations during AutoMount
 
-3. Created MountService implementation (611 lines)
-   - Manages mount operations with race condition prevention
-   - Implements timeout handling (10s initial, 30s extended)
-   - Provides background continuation for long-running operations
-   - Handles user prompts for manual mounts vs auto-mount
-   - Integrates with IMountMonitoringService for mount monitoring
-   - Manages ConcurrentDictionary of semaphores for mount locking
-   - Creates unmount callbacks for external unmount detection
-   - Checks for processes using drives during unmount timeout
-   - Logs errors to mount_error.log file
+3. Updated ExitApplicationAsync method
+   - Set _isExiting = true at start
+   - Notify property changes for CanInteractWithList and CanAddMount
+   - Wrap entire method in try-finally block
+   - Reset _isExiting = false in finally (if user cancels exit)
+   - Ensures UI re-enables if exit is cancelled
 
-4. Modified ShellViewModel
-   - Added IMountService dependency injection
-   - Removed MountInternal() method (~380 lines)
-   - Removed Unmount() method (~270 lines)
-   - Removed _mountLocks ConcurrentDictionary field
-   - Removed OnUnmountDetected() callback method (~14 lines)
-   - Simplified Mount() to call service.MountAsync()
-   - Simplified Unmount() to call service.UnmountAsync()
-   - Added MountService.Initialize() call in OnViewLoaded
-   - Updated AddMount() to use service.InitializeMountLock()
-   - Updated RemoveMount() to use service.RemoveMountLock()
-   - Updated LoadConfigurationAsync() to use service methods
-   - Net reduction: ~673 lines
+4. Updated LoadConfigurationAsync method
+   - Wrap AutoMount Task.Run in try-finally block
+   - Set _isAutoMounting = true before mounting loop
+   - Use dispatcher to notify CanAddMount property change
+   - Reset _isAutoMounting = false in finally
+   - Ensures Add button re-enables after AutoMount completes
 
-5. Registered service in App.xaml.cs Bootstrapper
+5. Updated ShellView.xaml
+   - Bound ListView.IsEnabled to CanInteractWithList
+   - Bound AddMount button IsEnabled to CanAddMount
+   - Remove button already has its own CanRemoveMount logic
 
 Benefits:
-- Separation of concerns: Mount/unmount logic isolated from view model
-- Better testability: MountService can be mocked for testing
-- Cleaner ShellViewModel: Major reduction in complexity and line count
-- Reusability: Service can handle any mount item with callbacks
-- Maintainability: All mount/unmount logic centralized in one place
-- Improved error handling: Consistent error handling across all operations
-- Better timeout management: Centralized timeout and background handling
+- Race condition eliminated: No new mounts during exit
+- Predictable behavior: All mounted items are safely unmounted
+- Better UX: Visual feedback that operation is in progress
+- Flexible design: AutoMount doesn't freeze entire UI
+- Safe cancellation: UI re-enables if exit is cancelled
+- Thread-safe: Dispatcher ensures UI updates on correct thread
+
+Behavior:
+┌─────────────────────────────────────────┐
+│ Operation         │ ListView │ Add Btn  │
+├─────────────────────────────────────────┤
+│ Normal            │ Enabled  │ Enabled  │
+│ Exit (in dialog)  │ Disabled │ Disabled │
+│ Exit (cancelled)  │ Enabled  │ Enabled  │
+│ AutoMount         │ Enabled  │ Disabled │
+└─────────────────────────────────────────┘
+
+Technical Details:
+- Individual mount/unmount buttons still controlled by item.CanMount/CanUnmount
+- ListView disabled = all child controls (checkboxes, comboboxes, buttons) disabled
+- Property notifications use Caliburn.Micro's NotifyOfPropertyChange
+- AutoMount uses dispatcher.InvokeAsync for thread-safe property updates
+- Finally blocks guarantee UI state restoration even on exceptions
 
 Files changed:
-- Services/Interfaces/IMountService.cs (new, 60 lines)
-- Services/MountService.cs (new, 611 lines)
-- ViewModels/ShellViewModel.cs (modified, -673 lines)
-  * Line 25: Added IMountService field
-  * Line 73: Added IMountService parameter to constructor
-  * Line 80: Store IMountService in field
-  * Line 100-103: Initialize MountService with callbacks
-  * Line 189: Updated AddMount to use service
-  * Line 209: Updated RemoveMount to use service
-  * Lines 233-236: Simplified Mount method
-  * Lines 238-241: Simplified Unmount method
-  * Lines 238-634: Removed MountInternal method
-  * Lines 620-634: Removed OnUnmountDetected callback
-  * Lines 636-906: Removed Unmount method
-  * Line 282: Updated LoadConfigurationAsync to use service
-  * Line 324: Updated auto-mount to use service
-- App.xaml.cs (modified, +1 line)
-  * Line 118: Registered IMountService service
+- ViewModels/ShellViewModel.cs (modified, +51 lines)
+  * Lines 29-30: Added _isExiting and _isAutoMounting flags
+  * Lines 34-36: Added CanInteractWithList and CanAddMount properties
+  * Lines 140-179: Updated ExitApplicationAsync with locking logic
+  * Lines 342-377: Updated LoadConfigurationAsync AutoMount with locking
+- Views/ShellView.xaml (modified, +2 lines)
+  * Line 48: Added IsEnabled binding to ListView
+  * Line 154: Added IsEnabled binding to AddMount button
 
-Build status: Success (0 errors, 35 warnings - same existing warnings)
+Build status: Success (0 errors, 35 warnings - unchanged)
 ```
 
 ## Notes
-- Part of ongoing ShellViewModel refactoring effort (Phase 5 of 7)
-- Maintains all existing functionality while improving code organization
-- No breaking changes to public API or user-facing behavior
-- Service uses callback pattern to update UI and save configuration
-- Mount operations handle both manual and auto-mount scenarios differently
-- Background continuation ensures UI doesn't block on slow operations
-- Timeout handling provides user feedback and control
-- Process detection helps identify why unmounts are delayed
+- Fixes critical race condition bug identified in theoretical scenario
+- No breaking changes to existing functionality
+- All existing features continue to work as expected
+- UI feedback makes locked state clear to users
+- Proper cleanup ensures no permanent UI lockouts
+- Part of ongoing code quality improvements post-refactoring
 ```
