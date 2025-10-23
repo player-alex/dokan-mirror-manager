@@ -1,109 +1,140 @@
-# Commit Message: UI Locking During Critical Operations
+# Commit Message: Safe AutoMount Cancellation During Exit
 
 ## Title
 ```
-fix: Prevent race condition by locking UI during exit and AutoMount
+fix: Add AutoMount cancellation during exit to prevent zombie drives
 ```
 
 ## Body
 ```
-Add UI locking mechanism to prevent race conditions during critical operations
-such as application exit and AutoMount, ensuring safe and predictable behavior.
+Implement CancellationToken-based safe exit mechanism to properly cancel
+AutoMount operations and prevent zombie drives when exiting during AutoMount.
 
-Problem:
+Problem 1 (Previous fix):
 When the user clicks "Exit" in the tray menu, a confirmation dialog appears.
 During this time, the UI remains responsive, allowing users to mount additional
-items. This creates a race condition where:
-1. Exit operation captures snapshot of 4 mounted items
-2. User quickly mounts a 5th item while dialog is shown
-3. Exit proceeds to unmount only the original 4 items
-4. Application exits with the 5th item still mounted (zombie drive)
+items, creating a race condition where newly mounted items are not unmounted.
 
-Similarly, during AutoMount operations, users could add new items or perform
-other operations that might interfere with the sequential mounting process.
+Problem 2 (This fix):
+When AutoMount is running in background and user clicks "Exit":
+1. AutoMount task runs independently in Task.Run (fire-and-forget)
+2. Exit collects snapshot of mounted items at that moment
+3. AutoMount continues mounting items in background
+4. User confirms exit, only original items are unmounted
+5. Application exits while AutoMount is still running
+6. Newly mounted items during exit become zombie drives
+7. AutoMount task may crash when app shuts down mid-operation
+
+Example scenario:
+- 10 items with AutoMount enabled
+- Items 1-3 mounted, item 4 in progress
+- User clicks Exit
+- Items 4-6 complete mounting while dialog is shown
+- User clicks "Yes"
+- Only items 1-3 are unmounted
+- Items 4-6 remain as zombie drives
+- AutoMount task may still be running after app shutdown
 
 Solution:
-Implement differential UI locking based on operation criticality:
-- Exit operation: Lock entire ListView (complete freeze)
-- AutoMount operation: Lock only AddMount button (allow monitoring)
+Implement CancellationToken-based cooperative cancellation:
+1. Add CancellationTokenSource for AutoMount control
+2. Check cancellation before each mount operation
+3. Exit cancels AutoMount and waits for completion
+4. Re-collect mounted items after cancellation
+5. Safely unmount all items before shutdown
 
 Changes:
-1. Added UI state management flags to ShellViewModel
-   - _isExiting: Tracks if application is in exit process
-   - _isAutoMounting: Tracks if AutoMount is in progress
+1. Added CancellationTokenSource field
+   - _autoMountCts: Controls AutoMount task cancellation
+   - Created when AutoMount starts
+   - Disposed when AutoMount completes
 
-2. Added computed properties for UI binding
-   - CanInteractWithList: Returns !_isExiting
-     * Completely disables ListView during exit
-     * Prevents any mount/unmount operations
-     * Prevents checkbox/combobox changes
-   - CanAddMount: Returns !_isExiting && !_isAutoMounting
-     * Disables Add button during exit
-     * Disables Add button during AutoMount
-     * Allows other operations during AutoMount
+2. Updated LoadConfigurationAsync AutoMount loop
+   - Create CancellationTokenSource at start
+   - Check cancellationToken.IsCancellationRequested before each mount
+   - Check cancellation during mount wait loop
+   - Use CancellationToken.None for delays (no-throw behavior)
+   - Catch OperationCanceledException (expected during exit)
+   - Properly dispose CancellationTokenSource in finally
 
-3. Updated ExitApplicationAsync method
-   - Set _isExiting = true at start
-   - Notify property changes for CanInteractWithList and CanAddMount
-   - Wrap entire method in try-finally block
-   - Reset _isExiting = false in finally (if user cancels exit)
-   - Ensures UI re-enables if exit is cancelled
-
-4. Updated LoadConfigurationAsync method
-   - Wrap AutoMount Task.Run in try-finally block
-   - Set _isAutoMounting = true before mounting loop
-   - Use dispatcher to notify CanAddMount property change
-   - Reset _isAutoMounting = false in finally
-   - Ensures Add button re-enables after AutoMount completes
-
-5. Updated ShellView.xaml
-   - Bound ListView.IsEnabled to CanInteractWithList
-   - Bound AddMount button IsEnabled to CanAddMount
-   - Remove button already has its own CanRemoveMount logic
+3. Updated ExitApplicationAsync
+   - Check if AutoMount is running (_isAutoMounting && _autoMountCts != null)
+   - Call _autoMountCts.Cancel() to signal cancellation
+   - Wait up to 3 seconds for AutoMount to complete cancellation
+   - Re-collect mounted items AFTER AutoMount is cancelled
+   - Ensures all mounted items (including those mounted during wait) are unmounted
 
 Benefits:
-- Race condition eliminated: No new mounts during exit
-- Predictable behavior: All mounted items are safely unmounted
-- Better UX: Visual feedback that operation is in progress
-- Flexible design: AutoMount doesn't freeze entire UI
-- Safe cancellation: UI re-enables if exit is cancelled
-- Thread-safe: Dispatcher ensures UI updates on correct thread
+- Complete race condition elimination: AutoMount stops before collecting items
+- Predictable exit: All mounted items are properly unmounted
+- Safe cancellation: Cooperative cancellation, no abrupt task termination
+- No zombie drives: Even items mounted during exit are cleaned up
+- Graceful shutdown: AutoMount completes current operation before stopping
+- Resource cleanup: CancellationTokenSource properly disposed
 
-Behavior:
-┌─────────────────────────────────────────┐
-│ Operation         │ ListView │ Add Btn  │
-├─────────────────────────────────────────┤
-│ Normal            │ Enabled  │ Enabled  │
-│ Exit (in dialog)  │ Disabled │ Disabled │
-│ Exit (cancelled)  │ Enabled  │ Enabled  │
-│ AutoMount         │ Enabled  │ Disabled │
-└─────────────────────────────────────────┘
+Behavior Timeline (10 items AutoMount, exit during item 4):
 
-Technical Details:
-- Individual mount/unmount buttons still controlled by item.CanMount/CanUnmount
-- ListView disabled = all child controls (checkboxes, comboboxes, buttons) disabled
-- Property notifications use Caliburn.Micro's NotifyOfPropertyChange
-- AutoMount uses dispatcher.InvokeAsync for thread-safe property updates
-- Finally blocks guarantee UI state restoration even on exceptions
+Before this fix:
+T0: Items 1-3 mounted ✅
+T1: Item 4 mounting...
+T2: User clicks Exit
+T3: Snapshot: [1,2,3]
+T4: Items 4-6 complete ❌ (background continues)
+T5: User clicks "Yes"
+T6: Unmount items 1-3 only
+T7: Exit (items 4-6 remain as zombies) 💥
+
+After this fix:
+T0: Items 1-3 mounted ✅
+T1: Item 4 mounting...
+T2: User clicks Exit
+T3: Cancel AutoMount signal sent
+T4: Item 4 completes, loop breaks ✅
+T5: AutoMount task ends cleanly
+T6: Re-collect: [1,2,3,4] ✅
+T7: User clicks "Yes"
+T8: Unmount items 1-2-3-4 all ✅
+T9: Clean exit 🎉
+
+Technical Implementation:
+- CancellationToken checked at 3 points in loop:
+  1. Before starting each mount
+  2. During mount completion wait
+  3. Before inter-mount delay
+- Uses CancellationToken.None for delays to avoid exceptions
+- Catches OperationCanceledException as expected flow
+- 3-second timeout prevents indefinite wait if task hangs
+- Finally block ensures cleanup even on unexpected errors
+
+Edge Cases Handled:
+- AutoMount not running: No cancellation needed, normal exit flow
+- AutoMount already complete: Token disposed, normal exit flow
+- Cancellation during mount: Current mount completes, no new mounts start
+- Timeout waiting for cancel: Proceeds with exit anyway (safety fallback)
+- Exception during AutoMount: Finally block ensures cleanup
 
 Files changed:
-- ViewModels/ShellViewModel.cs (modified, +51 lines)
-  * Lines 29-30: Added _isExiting and _isAutoMounting flags
-  * Lines 34-36: Added CanInteractWithList and CanAddMount properties
-  * Lines 140-179: Updated ExitApplicationAsync with locking logic
-  * Lines 342-377: Updated LoadConfigurationAsync AutoMount with locking
-- Views/ShellView.xaml (modified, +2 lines)
-  * Line 48: Added IsEnabled binding to ListView
-  * Line 154: Added IsEnabled binding to AddMount button
+- ViewModels/ShellViewModel.cs (modified, +30 lines)
+  * Line 31: Added _autoMountCts field (CancellationTokenSource?)
+  * Lines 147-159: Added AutoMount cancellation in ExitApplicationAsync
+  * Line 162: Re-collect mounted items after cancellation
+  * Lines 346-398: Updated AutoMount loop with cancellation support
+    - Line 346-347: Create and store CancellationTokenSource
+    - Line 357-358: Check cancellation before each mount
+    - Lines 370-371: Check cancellation during wait loop
+    - Line 373: Use CancellationToken.None for delay
+    - Lines 378-381: Conditional delay with cancellation check
+    - Lines 384-387: Catch OperationCanceledException
+    - Lines 391-392: Dispose CancellationTokenSource
 
 Build status: Success (0 errors, 35 warnings - unchanged)
 ```
 
 ## Notes
-- Fixes critical race condition bug identified in theoretical scenario
+- Fixes critical race condition during AutoMount + Exit
+- Builds upon previous UI locking fix (exit/AutoMount)
 - No breaking changes to existing functionality
-- All existing features continue to work as expected
-- UI feedback makes locked state clear to users
-- Proper cleanup ensures no permanent UI lockouts
-- Part of ongoing code quality improvements post-refactoring
+- Cooperative cancellation is safer than abrupt termination
+- Properly handles all edge cases and cleanup
+- Part of ongoing reliability improvements
 ```

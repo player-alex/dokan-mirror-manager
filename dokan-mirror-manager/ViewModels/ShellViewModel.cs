@@ -28,6 +28,7 @@ public class ShellViewModel : Screen
     private readonly Dispatcher _dispatcher;
     private bool _isExiting = false;
     private bool _isAutoMounting = false;
+    private CancellationTokenSource? _autoMountCts = null;
 
     public ObservableCollection<MountItem> MountItems { get; } = [];
 
@@ -143,6 +144,21 @@ public class ShellViewModel : Screen
 
         try
         {
+            // Cancel AutoMount if it's in progress
+            if (_isAutoMounting && _autoMountCts != null)
+            {
+                _autoMountCts.Cancel();
+
+                // Wait for AutoMount to complete cancellation (max 3 seconds)
+                var waitCount = 0;
+                while (_isAutoMounting && waitCount < 30)
+                {
+                    await Task.Delay(100);
+                    waitCount++;
+                }
+            }
+
+            // Collect mounted items after AutoMount is cancelled
             var mountedItems = MountItems.Where(m => m.Status == MountStatus.Mounted).ToList();
 
             if (mountedItems.Any())
@@ -342,6 +358,9 @@ public class ShellViewModel : Screen
                 try
                 {
                     _isAutoMounting = true;
+                    _autoMountCts = new CancellationTokenSource();
+                    var cancellationToken = _autoMountCts.Token;
+
                     await _dispatcher.InvokeAsync(() =>
                     {
                         NotifyOfPropertyChange(() => CanAddMount);
@@ -349,6 +368,10 @@ public class ShellViewModel : Screen
 
                     foreach (var item in MountItems.Where(m => m.AutoMount && m.CanMount).ToList())
                     {
+                        // Check if cancellation is requested (e.g., during exit)
+                        if (cancellationToken.IsCancellationRequested)
+                            break;
+
                         // Use captured dispatcher
                         await _dispatcher.InvokeAsync(async () =>
                         {
@@ -359,17 +382,30 @@ public class ShellViewModel : Screen
                         var timeout = 0;
                         while (item.Status == MountStatus.Mounting && timeout < 100)
                         {
-                            await Task.Delay(100);
+                            if (cancellationToken.IsCancellationRequested)
+                                break;
+
+                            await Task.Delay(100, CancellationToken.None); // Don't throw on cancel
                             timeout++;
                         }
 
                         // Small delay between mounts to ensure Dokan is ready
-                        await Task.Delay(500);
+                        if (!cancellationToken.IsCancellationRequested)
+                        {
+                            await Task.Delay(500, CancellationToken.None);
+                        }
                     }
+                }
+                catch (OperationCanceledException)
+                {
+                    // AutoMount was cancelled (e.g., during application exit) - this is expected
                 }
                 finally
                 {
                     _isAutoMounting = false;
+                    _autoMountCts?.Dispose();
+                    _autoMountCts = null;
+
                     await _dispatcher.InvokeAsync(() =>
                     {
                         NotifyOfPropertyChange(() => CanAddMount);
