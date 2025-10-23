@@ -662,35 +662,56 @@ public class Mirror : IDokanOperations2
 
     public NtStatus GetDiskFreeSpace(out long freeBytesAvailable, out long totalNumberOfBytes, out long totalNumberOfFreeBytes, ref DokanFileInfo info)
     {
+        // Try Win32 API first (supports network paths and all path types)
         try
         {
-            var dinfo = DriveInfo.GetDrives().Single(di => string.Equals(di.RootDirectory.Name, Path.GetPathRoot(path + "\\"), StringComparison.OrdinalIgnoreCase));
+            // Ensure path has trailing backslash for Win32 API
+            var pathForApi = path.TrimEnd('\\') + "\\";
 
-            freeBytesAvailable = dinfo.TotalFreeSpace;
-            totalNumberOfBytes = dinfo.TotalSize;
-            totalNumberOfFreeBytes = dinfo.AvailableFreeSpace;
-
-            return Trace(nameof(GetDiskFreeSpace), default, info, DokanResult.Success, $"out {freeBytesAvailable}",
-                $"out {totalNumberOfBytes}", $"out {totalNumberOfFreeBytes}");
-        }
-        catch (Exception ex)
-        {
-            // Log the actual exception for debugging
-            var logPath = System.IO.Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "diskspace_error.log");
-            try
+            if (NativeMethods.GetDiskFreeSpaceEx(pathForApi, out ulong free, out ulong total, out ulong totalFree))
             {
-                System.IO.File.AppendAllText(logPath, $"[{DateTime.Now}] GetDiskFreeSpace error for path '{path}':\n{ex.GetType().Name}: {ex.Message}\n{ex.StackTrace}\n\n");
+                freeBytesAvailable = (long)free;
+                totalNumberOfBytes = (long)total;
+                totalNumberOfFreeBytes = (long)totalFree;
+
+                return Trace(nameof(GetDiskFreeSpace), default, info, DokanResult.Success, $"out {freeBytesAvailable}",
+                    $"out {totalNumberOfBytes}", $"out {totalNumberOfFreeBytes}");
             }
-            catch { }
-
-            // Return fallback values
-            freeBytesAvailable = 512L * 1024 * 1024 * 1024; // 512 GB
-            totalNumberOfBytes = 1024L * 1024 * 1024 * 1024; // 1 TB
-            totalNumberOfFreeBytes = 512L * 1024 * 1024 * 1024; // 512 GB
-
-            return Trace(nameof(GetDiskFreeSpace), default, info, DokanResult.Success, $"out {freeBytesAvailable}",
-                $"out {totalNumberOfBytes}", $"out {totalNumberOfFreeBytes}");
         }
+        catch
+        {
+            // Win32 API failed, fall through to DriveInfo
+        }
+
+        // Fallback to DriveInfo for local drives
+        try
+        {
+            var rootPath = Path.GetPathRoot(path + "\\");
+            var dinfo = DriveInfo.GetDrives()
+                .FirstOrDefault(di => string.Equals(di.RootDirectory.Name, rootPath, StringComparison.OrdinalIgnoreCase));
+
+            if (dinfo != null && dinfo.IsReady)
+            {
+                freeBytesAvailable = dinfo.TotalFreeSpace;
+                totalNumberOfBytes = dinfo.TotalSize;
+                totalNumberOfFreeBytes = dinfo.AvailableFreeSpace;
+
+                return Trace(nameof(GetDiskFreeSpace), default, info, DokanResult.Success, $"out {freeBytesAvailable}",
+                    $"out {totalNumberOfBytes}", $"out {totalNumberOfFreeBytes}");
+            }
+        }
+        catch
+        {
+            // DriveInfo also failed, fall through to fallback
+        }
+
+        // Last resort: return fallback values
+        freeBytesAvailable = 512L * 1024 * 1024 * 1024; // 512 GB
+        totalNumberOfBytes = 1024L * 1024 * 1024 * 1024; // 1 TB
+        totalNumberOfFreeBytes = 512L * 1024 * 1024 * 1024; // 512 GB
+
+        return Trace(nameof(GetDiskFreeSpace), default, info, DokanResult.Success, $"out {freeBytesAvailable}",
+            $"out {totalNumberOfBytes}", $"out {totalNumberOfFreeBytes}");
     }
 
     public NtStatus GetVolumeInformation(NativeMemory<char> volumeLabel, out FileSystemFeatures features,

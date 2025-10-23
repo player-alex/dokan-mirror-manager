@@ -71,4 +71,28 @@ internal static class NativeMethods
 
     // IOCTL for getting volume info
     public const uint FSCTL_GET_RETRIEVAL_POINTERS = 0x00090073;
+
+    /// <summary>
+    /// Retrieves information about the amount of space that is available on a disk volume,
+    /// which is the total amount of space, the total amount of free space, and the total
+    /// amount of free space available to the user that is associated with the calling thread.
+    /// </summary>
+    /// <param name="lpDirectoryName">A directory on the disk.
+    /// If this parameter is NULL, the function uses the root of the current disk.
+    /// If this parameter is a UNC name, it must include a trailing backslash (for example, "\\MyServer\MyShare\").
+    /// Furthermore, a drive specification must have a trailing backslash (for example, "C:\").</param>
+    /// <param name="lpFreeBytesAvailable">A pointer to a variable that receives the total number of free bytes on a disk
+    /// that are available to the user who is associated with the calling thread.</param>
+    /// <param name="lpTotalNumberOfBytes">A pointer to a variable that receives the total number of bytes on a disk
+    /// that are available to the user who is associated with the calling thread.</param>
+    /// <param name="lpTotalNumberOfFreeBytes">A pointer to a variable that receives the total number of free bytes on a disk.</param>
+    /// <returns>If the function succeeds, the return value is nonzero. If the function fails, the return value is zero (0).</returns>
+    /// <remarks>See <a href="https://docs.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-getdiskfreespaceexw">GetDiskFreeSpaceEx function (MSDN)</a></remarks>
+    [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static extern bool GetDiskFreeSpaceEx(
+        string lpDirectoryName,
+        out ulong lpFreeBytesAvailable,
+        out ulong lpTotalNumberOfBytes,
+        out ulong lpTotalNumberOfFreeBytes);
 }
