@@ -32,7 +32,7 @@ public class ShellViewModel : Screen
 
     public ObservableCollection<MountItem> MountItems { get; } = [];
 
-    public bool CanInteractWithList => !_isExiting;
+    public bool CanInteractWithList => !_isExiting && !_isAutoMounting;
 
     public bool CanAddMount => !_isExiting && !_isAutoMounting;
 
@@ -363,6 +363,7 @@ public class ShellViewModel : Screen
 
                     await _dispatcher.InvokeAsync(() =>
                     {
+                        NotifyOfPropertyChange(() => CanInteractWithList);
                         NotifyOfPropertyChange(() => CanAddMount);
                     });
 
@@ -408,6 +409,7 @@ public class ShellViewModel : Screen
 
                     await _dispatcher.InvokeAsync(() =>
                     {
+                        NotifyOfPropertyChange(() => CanInteractWithList);
                         NotifyOfPropertyChange(() => CanAddMount);
                     });
                 }
