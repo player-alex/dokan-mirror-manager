@@ -229,7 +229,7 @@ public class ShellViewModel : Screen
 
             _driveLetterManager.UpdateAllDriveLetters(MountItems);
 
-            SaveConfigurationAsync();
+            _ = SaveConfigurationAsync();
             StatusMessage = $"Added: {sourcePath}";
         }
     }
@@ -264,7 +264,7 @@ public class ShellViewModel : Screen
             }
 
             _driveLetterManager.UpdateAllDriveLetters(MountItems);
-            SaveConfigurationAsync();
+            _ = SaveConfigurationAsync();
             StatusMessage = $"Removed: {itemToRemove.SourcePath}";
         }
     }
@@ -301,7 +301,7 @@ public class ShellViewModel : Screen
             e.PropertyName == nameof(MountItem.IsReadOnly) ||
             e.PropertyName == nameof(MountItem.DestinationLetter))
         {
-            SaveConfigurationAsync();
+            _ = SaveConfigurationAsync();
         }
     }
 
@@ -353,7 +353,7 @@ public class ShellViewModel : Screen
             }
 
             // Auto-mount items that have AutoMount enabled (sequentially to avoid conflicts)
-            Task.Run(async () =>
+            _ = Task.Run(async () =>
             {
                 try
                 {

@@ -75,7 +75,7 @@
                     </GridViewColumn>
 
                     <!-- Auto Mount Column -->
-                    <GridViewColumn Header="Auto Mount" Width="90">
+                    <GridViewColumn Header="Auto Mount" Width="95">
                         <GridViewColumn.CellTemplate>
                             <DataTemplate>
                                 <CheckBox IsChecked="{Binding AutoMount}"

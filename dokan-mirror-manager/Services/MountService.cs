@@ -19,9 +19,9 @@ public class MountService : IMountService
     private readonly IMountMonitoringService _mountMonitoringService;
     private readonly Dispatcher _dispatcher;
     private readonly ConcurrentDictionary<MountItem, SemaphoreSlim> _mountLocks = new();
-    private Func<Window?>? _getWindow;
-    private Action<string>? _setStatusMessage;
-    private Func<Task>? _saveConfiguration;
+    private Func<Window?> _getWindow = null!;
+    private Action<string> _setStatusMessage = null!;
+    private Func<Task> _saveConfiguration = null!;
 
     public MountService(IMountMonitoringService mountMonitoringService)
     {
@@ -36,9 +36,9 @@ public class MountService : IMountService
     /// </summary>
     public void Initialize(Func<Window?> getWindow, Action<string> setStatusMessage, Func<Task> saveConfiguration)
     {
-        _getWindow = getWindow;
-        _setStatusMessage = setStatusMessage;
-        _saveConfiguration = saveConfiguration;
+        _getWindow = getWindow ?? throw new ArgumentNullException(nameof(getWindow));
+        _setStatusMessage = setStatusMessage ?? throw new ArgumentNullException(nameof(setStatusMessage));
+        _saveConfiguration = saveConfiguration ?? throw new ArgumentNullException(nameof(saveConfiguration));
     }
 
     public async Task<MountResult> MountAsync(MountItem item, bool isAutoMount)
@@ -291,7 +291,7 @@ public class MountService : IMountService
         }
     }
 
-    private async Task<MountResult> HandleBackgroundMount(MountItem item, string driveLetter, Task<DokanInstance> mountTask, bool isAutoMount, DateTime startTime, bool showContinueMessage = true)
+    private Task<MountResult> HandleBackgroundMount(MountItem item, string driveLetter, Task<DokanInstance> mountTask, bool isAutoMount, DateTime startTime, bool showContinueMessage = true)
     {
         _setStatusMessage($"Mount of {driveLetter} will continue in background...");
 
@@ -353,7 +353,7 @@ public class MountService : IMountService
             }
         });
 
-        return new MountResult { Success = true, ContinuedInBackground = true };
+        return Task.FromResult(new MountResult { Success = true, ContinuedInBackground = true });
     }
 
     public async Task<UnmountResult> UnmountAsync(MountItem item)
@@ -528,7 +528,7 @@ public class MountService : IMountService
         }
     }
 
-    private async Task<UnmountResult> HandleBackgroundUnmount(MountItem item, string driveLetter, Task unmountTask, DateTime startTime, bool showContinueMessage = true)
+    private Task<UnmountResult> HandleBackgroundUnmount(MountItem item, string driveLetter, Task unmountTask, DateTime startTime, bool showContinueMessage = true)
     {
         _setStatusMessage($"Unmount of {driveLetter} will continue in background...");
 
@@ -585,7 +585,7 @@ public class MountService : IMountService
             }
         });
 
-        return new UnmountResult { Success = true, ContinuedInBackground = true };
+        return Task.FromResult(new UnmountResult { Success = true, ContinuedInBackground = true });
     }
 
     private Action<MountItem> CreateUnmountCallback(MountItem item)
