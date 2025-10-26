@@ -125,17 +125,6 @@ dotnet run --project dokan-mirror-manager/dokan-mirror-manager.csproj
 
 > ⚠️ **Note**: Must be run as Administrator for Dokan operations.
 
-### 📦 Building as Library
-
-The project includes `Loader.cs.example` which demonstrates how to use DokanMirror as a library:
-
-1. Change `OutputType` in `.csproj` from `WinExe` to `Library`
-2. Rename `Loader.cs.example` to `Loader.cs`
-3. Build the project - it will produce `DokanMirror.dll`
-4. Call `__Launch__` from your native code to start the application
-
-See [Loader.cs.example](dokan-mirror-manager/Loader.cs.example) for C/C++ usage examples.
-
 ## ⚙️ Configuration
 
 Mount configurations are automatically saved to `mounts.json` in the application directory.
