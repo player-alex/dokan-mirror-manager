@@ -6,6 +6,7 @@ using Microsoft.Win32;
 using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.IO;
+using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Interop;
 using System.Windows.Threading;
@@ -20,6 +21,7 @@ public class ShellViewModel : Screen
     private readonly ITrayIconManager _trayIconManager;
     private readonly IMountMonitoringService _mountMonitoringService;
     private readonly IMountService _mountService;
+    private readonly IMountPointQueryService _mountPointQueryService;
     private readonly Dokan _dokan;
     private string _statusMessage = string.Empty;
     private MountItem? _selectedItem;
@@ -74,7 +76,7 @@ public class ShellViewModel : Screen
 
     public List<string> AvailableDriveLetters => _driveLetterManager.GetAvailableDriveLetters(MountItems, null);
 
-    public ShellViewModel(IWindowManager windowManager, IConfigurationService configurationService, IDriveLetterManager driveLetterManager, ITrayIconManager trayIconManager, IMountMonitoringService mountMonitoringService, IMountService mountService)
+    public ShellViewModel(IWindowManager windowManager, IConfigurationService configurationService, IDriveLetterManager driveLetterManager, ITrayIconManager trayIconManager, IMountMonitoringService mountMonitoringService, IMountService mountService, IMountPointQueryService mountPointQueryService)
     {
         _windowManager = windowManager;
         _configurationService = configurationService;
@@ -82,6 +84,7 @@ public class ShellViewModel : Screen
         _trayIconManager = trayIconManager;
         _mountMonitoringService = mountMonitoringService;
         _mountService = mountService;
+        _mountPointQueryService = mountPointQueryService;
         _dokan = new Dokan(null!); // Dokan library accepts null for default logger
         DisplayName = "Dokan Mirror Manager";
 
@@ -110,6 +113,16 @@ public class ShellViewModel : Screen
         await LoadConfigurationAsync();
     }
 
+    [DllImport("user32.dll")]
+    private static extern bool ChangeWindowMessageFilterEx(IntPtr hwnd, uint msg, ChangeWindowMessageFilterExAction action, IntPtr pChangeFilterStruct);
+
+    private enum ChangeWindowMessageFilterExAction : uint
+    {
+        Reset = 0,
+        Allow = 1,
+        Disallow = 2
+    }
+
     private void SetupWindowMessageHook(object view)
     {
         if (view is Window window)
@@ -117,6 +130,14 @@ public class ShellViewModel : Screen
             var helper = new WindowInteropHelper(window);
             _hwndSource = HwndSource.FromHwnd(helper.Handle);
             _hwndSource?.AddHook(WndProc);
+
+            // CRITICAL FIX: Allow WM_COPYDATA messages from lower-privilege processes
+            // This is required for UIPI (User Interface Privilege Isolation) on Windows Vista+
+            ChangeWindowMessageFilterEx(
+                helper.Handle,
+                NativeMethods.WM_COPYDATA,
+                ChangeWindowMessageFilterExAction.Allow,
+                IntPtr.Zero);
         }
     }
 
@@ -128,7 +149,76 @@ public class ShellViewModel : Screen
             _trayIconManager.ShowWindow();
             handled = true;
         }
+        else if (msg == NativeMethods.WM_COPYDATA)
+        {
+            // External process requesting mount point information
+            HandleWmCopyData(lParam);
+            handled = true;
+        }
         return IntPtr.Zero;
+    }
+
+    private void HandleWmCopyData(IntPtr lParam)
+    {
+        try
+        {
+            // Marshal COPYDATASTRUCT from lParam
+            var copyData = Marshal.PtrToStructure<NativeMethods.COPYDATASTRUCT>(lParam);
+
+            // Check if this is a mount point query (dwData should be WM_GET_MOUNT_POINTS)
+            if (copyData.dwData.ToInt32() != App.WM_GET_MOUNT_POINTS)
+            {
+                return;
+            }
+
+            // Extract Named Pipe name from lpData
+            if (copyData.lpData == IntPtr.Zero || copyData.cbData <= 0)
+            {
+                return;
+            }
+
+            // Extract pipe name - remove null terminator if present
+            var pipeName = Marshal.PtrToStringUni(copyData.lpData, copyData.cbData / 2);
+            if (pipeName != null)
+            {
+                pipeName = pipeName.TrimEnd('\0');
+            }
+
+            if (string.IsNullOrWhiteSpace(pipeName))
+            {
+                return;
+            }
+
+            // Handle query asynchronously to avoid blocking UI thread
+            _ = Task.Run(async () =>
+            {
+                try
+                {
+                    // Collect mount items on UI thread
+                    ObservableCollection<MountItem> mountItemsSnapshot = null!;
+
+                    await _dispatcher.InvokeAsync(() =>
+                    {
+                        // Create a snapshot of mount items for thread-safe access
+                        mountItemsSnapshot = new ObservableCollection<MountItem>(MountItems);
+                    });
+
+                    // Send response via Named Pipe
+                    await _mountPointQueryService.HandleMountPointQueryAsync(
+                        pipeName,
+                        mountItemsSnapshot,
+                        CancellationToken.None);
+                }
+                catch
+                {
+                    // Silently ignore IPC errors to prevent application crashes
+                }
+            });
+        }
+        catch
+        {
+            // Silently ignore marshaling errors to prevent application crashes
+        }
     }
 
     private void ShowWindow()

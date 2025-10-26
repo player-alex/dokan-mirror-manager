@@ -1,0 +1,4 @@
+# Python dependencies for mount point query client
+
+# Windows API bindings
+pywin32>=306

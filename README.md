@@ -31,6 +31,7 @@
 - 🎨 **Modern UI** - Built with MahApps.Metro for a clean, modern interface
 - 🚀 **Non-Blocking Operations** - Async mount/unmount operations keep UI responsive
 - ⏱️ **Smart Unmount** - Progress tracking with timeout handling and background completion
+- 🔌 **IPC API** - Query mount points from external applications via WM_COPYDATA and Named Pipes
 
 ## 📸 Screenshots
 
@@ -177,6 +178,86 @@ The application automatically manages drive letters to prevent conflicts:
 - **Conflict Resolution**: If a drive letter is already in use, automatically selects the next available one
 - **Duplicate Handling**: When loading from `mounts.json`, duplicates are automatically resolved
 - **Dynamic Updates**: Drive letter dropdowns update in real-time based on availability
+
+## 🔌 IPC API
+
+Dokan Mirror Manager provides an IPC (Inter-Process Communication) API that allows external applications to query mount point information.
+
+### API Overview
+
+The API uses Windows messages (`WM_COPYDATA`) and Named Pipes for communication:
+
+1. **Client** finds the application window by title: `"Dokan Mirror Manager"`
+2. **Client** sends `WM_COPYDATA` message with a unique pipe name
+3. **Server** responds via the specified Named Pipe with JSON data
+
+### Protocol Details
+
+**Message:** `WM_COPYDATA (0x004A)`
+- `dwData`: `0x8002` (WM_GET_MOUNT_POINTS)
+- `lpData`: UTF-16LE encoded pipe name (with null terminator)
+- `cbData`: Byte length of pipe name (including null terminator)
+
+**Response Format (JSON):**
+```json
+{
+  "success": true,
+  "mountPoints": [
+    {
+      "srcPath": "C:\\SourceFolder",
+      "dstPath": "Z:\\",
+      "driveName": "SourceFolder",
+      "status": "Mounted",
+      "isReadOnly": true,
+      "autoMount": false,
+      "errorMessage": ""
+    }
+  ],
+  "timestamp": "2025-10-26T18:00:00.000Z",
+  "version": "1.0"
+}
+```
+
+### Python Example
+
+See [Examples/MountPointQuery/Python/mount_point_query_client.py](Examples/MountPointQuery/Python/mount_point_query_client.py) for a complete implementation:
+
+```python
+import win32gui
+from ctypes import *
+
+# Find application window
+hwnd = win32gui.FindWindow(None, "Dokan Mirror Manager")
+
+# Create Named Pipe name
+pipe_name = f"DokanMirrorManager_Query_{uuid.uuid4().hex}"
+
+# Send WM_COPYDATA request
+# ... (see example file for complete code)
+
+# Receive response via Named Pipe
+# Response contains JSON with mount point information
+```
+
+### C# Example
+
+See [Examples/MountPointQuery/CSharp/TestSendCopyData/Program.cs](Examples/MountPointQuery/CSharp/TestSendCopyData/Program.cs) for a complete C# implementation.
+
+### Status Values
+
+| Status | Description |
+|--------|-------------|
+| `Unmounted` | Not currently mounted |
+| `Mounting` | Mount operation in progress |
+| `Mounted` | Successfully mounted |
+| `Unmounting` | Unmount operation in progress |
+| `Error` | Mount operation failed |
+
+### Security Notes
+
+- **UIPI (User Interface Privilege Isolation)**: The application uses `ChangeWindowMessageFilterEx` to allow `WM_COPYDATA` messages from processes with different privilege levels
+- **Named Pipes**: Each request uses a unique pipe name to prevent conflicts
+- **Timeout**: The server has a 10-second timeout for pipe connections
 
 ## 🔧 Technologies Used
 

@@ -95,4 +95,18 @@ internal static class NativeMethods
         out ulong lpFreeBytesAvailable,
         out ulong lpTotalNumberOfBytes,
         out ulong lpTotalNumberOfFreeBytes);
+
+    // Windows message for IPC
+    public const int WM_COPYDATA = 0x004A;
+
+    /// <summary>
+    /// Structure for WM_COPYDATA message.
+    /// </summary>
+    [StructLayout(LayoutKind.Sequential)]
+    public struct COPYDATASTRUCT
+    {
+        public IntPtr dwData;
+        public int cbData;
+        public IntPtr lpData;
+    }
 }

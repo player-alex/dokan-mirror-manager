@@ -14,6 +14,7 @@ namespace DokanMirrorManager
     {
         private static Mutex? _mutex = null;
         private const int WM_SHOWWINDOW_CUSTOM = 0x8001;
+        public const int WM_GET_MOUNT_POINTS = 0x8002;
 
         [DllImport("user32.dll")]
         private static extern bool PostMessage(IntPtr hwnd, int msg, IntPtr wparam, IntPtr lparam);
@@ -116,6 +117,7 @@ namespace DokanMirrorManager
             _container.Singleton<ITrayIconManager, TrayIconManager>();
             _container.Singleton<IMountMonitoringService, MountMonitoringService>();
             _container.Singleton<IMountService, MountService>();
+            _container.Singleton<IMountPointQueryService, MountPointQueryService>();
 
             _container.PerRequest<ShellViewModel>();
         }
